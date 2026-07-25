@@ -1,0 +1,12 @@
+build/
+out/
+*.o
+*.yuv
+*.ppm
+*.mp4
+.DS_Store
+*.log
+*.tmp
+compile_commands.json
+.cache/
+.vscode/
