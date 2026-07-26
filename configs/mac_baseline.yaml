@@ -1,0 +1,32 @@
+camera:
+  index: 0
+  width: 1280
+  height: 720
+  fps: 30
+
+detector:
+  min_area: 1200
+  history: 400
+  var_threshold: 32
+  learning_rate: -1
+
+spatial:
+  zone_name: restricted_area
+  # Normalized polygon points in clockwise order.
+  # This default draws a central lower-area restricted zone.
+  restricted_zone:
+    - [0.28, 0.38]
+    - [0.72, 0.38]
+    - [0.82, 0.92]
+    - [0.18, 0.92]
+  trigger_relation: intersects
+  min_dwell_ms: 500
+
+actions:
+  snapshot_on_event: true
+  cooldown_ms: 1500
+
+output:
+  run_dir: runs/mac_baseline
+  show_window: true
+
