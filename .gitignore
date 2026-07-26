@@ -2,8 +2,19 @@
 __pycache__/
 *.py[cod]
 
+build/
+out/
 runs/
 data/
 models/
-build/
 
+*.o
+*.yuv
+*.ppm
+*.mp4
+*.log
+*.tmp
+
+compile_commands.json
+.cache/
+.vscode/
