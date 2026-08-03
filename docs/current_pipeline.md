@@ -148,7 +148,53 @@ CPU inference: about 26-31 ms
 Output: runs/wsl_yolo_rk3576_preview.jpg
 ```
 
-## 5. What This Proves
+## 5. One-Command Remote YOLO Pipeline
+
+The current MVP pipeline is automated by:
+
+```bash
+make edgeav-smoke
+```
+
+Equivalent direct command:
+
+```bash
+bash scripts/run_remote_yolo_pipeline.sh
+```
+
+It performs:
+
+```text
+RK3576 fresh frame capture
+  -> copy input.jpg to Mac
+  -> copy input.jpg to WSL
+  -> YOLOv8n CPU inference in WSL
+  -> annotated.jpg + detections.json + inference.json
+  -> copy results back to Mac
+  -> write latency.json and summary.txt
+```
+
+Output layout:
+
+```text
+runs/edgeav_remote_yolo/<timestamp>/
+  input.jpg
+  annotated.jpg
+  detections.json
+  inference.json
+  latency.json
+  summary.txt
+```
+
+The JSON outputs make the pipeline easier to benchmark and extend into spatial
+rules, tracking, and event reporting.
+
+The script starts with SSH preflight checks. If it reports that `wslbox` is not
+reachable, check the Windows PC first: Tailscale must be online, the machine
+must not be asleep, and the WSL SSH portproxy on port `2222` must still point to
+the current WSL IP.
+
+## 6. What This Proves
 
 The current baseline proves that the distributed development setup works:
 
@@ -171,7 +217,7 @@ work instead of only a notebook demo:
 - repeatable shell scripts
 - privacy-aware artifact handling
 
-## 6. Next Engineering Steps
+## 7. Next Engineering Steps
 
 Near-term:
 

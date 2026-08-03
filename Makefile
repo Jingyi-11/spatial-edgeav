@@ -9,7 +9,7 @@ LDFLAGS ?=
 SOURCES := src/main.c src/pipeline.c src/camera_capture.c src/yuv.c
 OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 
-.PHONY: all clean run-sim probe rk3567-sim
+.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke
 
 all: $(TARGET)
 
@@ -33,6 +33,9 @@ rk3567-sim: $(TARGET) out
 
 probe: $(TARGET)
 	$(TARGET) probe --device /dev/video0
+
+edgeav-smoke:
+	bash scripts/run_remote_yolo_pipeline.sh
 
 clean:
 	rm -rf $(BUILD_DIR) out

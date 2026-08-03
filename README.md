@@ -116,6 +116,16 @@ Run YOLO inference inside WSL and copy the result back to Mac:
 bash scripts/wsl_yolo_smoke_test.sh
 ```
 
+Run the full one-command remote pipeline:
+
+```bash
+make edgeav-smoke
+```
+
+This captures a fresh RK3576 camera frame, copies it to WSL, runs YOLOv8n,
+copies the annotated image and JSON outputs back to Mac, and records per-step
+latency under `runs/edgeav_remote_yolo/<timestamp>/`.
+
 Generated runtime artifacts are written under `runs/` and are intentionally not
 tracked by Git.
 
@@ -218,6 +228,7 @@ scripts/
   rk3576_camera_smoke_test.sh
   rk3576_camera_tune.sh
   rk3576_stream_baseline.sh
+  run_remote_yolo_pipeline.sh
   wsl_yolo_smoke_test.sh
   0*_rk3567_*.sh                 # board-side RK3567/RK3576 helpers
 src/
