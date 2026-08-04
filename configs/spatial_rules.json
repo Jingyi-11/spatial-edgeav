@@ -39,6 +39,24 @@
       "min_confidence": 0.35,
       "severity": "info",
       "message": "Screen-like object detected in the screen area."
+    },
+    {
+      "id": "chair_in_left_work_area",
+      "type": "zone_intersection",
+      "class_name": "chair",
+      "zone_id": "left_work_area",
+      "min_confidence": 0.5,
+      "severity": "info",
+      "message": "Chair-like object detected inside the left work area."
+    },
+    {
+      "id": "bottle_in_left_work_area",
+      "type": "zone_intersection",
+      "class_name": "bottle",
+      "zone_id": "left_work_area",
+      "min_confidence": 0.25,
+      "severity": "warning",
+      "message": "Bottle-like object detected inside the left work area."
     }
   ]
 }

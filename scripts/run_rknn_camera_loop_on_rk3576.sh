@@ -16,6 +16,9 @@ MODEL_BASENAME="$(basename "${LOCAL_MODEL}")"
 REPORT_NAME="${MODEL_BASENAME%.rknn}_camera_report.json"
 FRAMES_NAME="${MODEL_BASENAME%.rknn}_camera_frames.json"
 ANNOTATED_NAME="${MODEL_BASENAME%.rknn}_camera_last.jpg"
+OBSERVATIONS_NAME="${MODEL_BASENAME%.rknn}_observations.jsonl"
+EVENTS_NAME="${MODEL_BASENAME%.rknn}_events.jsonl"
+EVENT_SUMMARY_NAME="${MODEL_BASENAME%.rknn}_event_summary.json"
 LOCAL_REPORT_DIR="runs/rk3576_camera_rknn"
 SSH_RETRIES="${SSH_RETRIES:-3}"
 SSH_RETRY_DELAY_SEC="${SSH_RETRY_DELAY_SEC:-3}"
@@ -81,3 +84,16 @@ echo "Wrote:"
 echo "  ${LOCAL_REPORT_DIR}/${REPORT_NAME}"
 echo "  ${LOCAL_REPORT_DIR}/${FRAMES_NAME}"
 echo "  ${LOCAL_REPORT_DIR}/${ANNOTATED_NAME}"
+
+echo "Evaluating spatial rules over camera frames..."
+python3 scripts/evaluate_spatial_rules_jsonl.py \
+  --frames "${LOCAL_REPORT_DIR}/${FRAMES_NAME}" \
+  --report "${LOCAL_REPORT_DIR}/${REPORT_NAME}" \
+  --rules configs/spatial_rules.json \
+  --observations-jsonl "${LOCAL_REPORT_DIR}/${OBSERVATIONS_NAME}" \
+  --events-jsonl "${LOCAL_REPORT_DIR}/${EVENTS_NAME}" \
+  --summary "${LOCAL_REPORT_DIR}/${EVENT_SUMMARY_NAME}"
+
+echo "  ${LOCAL_REPORT_DIR}/${OBSERVATIONS_NAME}"
+echo "  ${LOCAL_REPORT_DIR}/${EVENTS_NAME}"
+echo "  ${LOCAL_REPORT_DIR}/${EVENT_SUMMARY_NAME}"

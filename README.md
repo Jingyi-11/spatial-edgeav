@@ -328,6 +328,21 @@ Detected classes across 60 frames: chair 79, surfboard 36, bottle 14, umbrella 8
 Artifacts: camera_report.json, camera_frames.json, camera_last.jpg
 ```
 
+Continuous RKNN detections can also be evaluated as a spatial event stream:
+
+```bash
+make evaluate-rknn-camera-events
+```
+
+Latest verified event-stream artifacts:
+
+```text
+observations: 60
+events: 71
+rules triggered: chair_in_left_work_area 70, bottle_in_left_work_area 1
+artifacts: observations.jsonl, events.jsonl, event_summary.json
+```
+
 Verified outputs are generated locally under `runs/model_exports/yolov8n/`:
 
 ```text

@@ -242,6 +242,7 @@ Near-term:
 continuous RK3576 capture
   -> RKNN INT8 inference on board
   -> per-frame detections JSON
+  -> observations.jsonl / events.jsonl
   -> latency/FPS report
   -> annotated camera frame
 ```
@@ -265,9 +266,9 @@ Python YOLO postprocess
   -> class-score + score-sum candidate filtering before DFL
   -> same-class containment NMS for nested duplicate boxes
   -> postprocess latency reduced from 33.843 ms to 3.446 ms
-  -> next: C++ RKNN runtime service
   -> JSONL event log
   -> spatial rule evaluation
+  -> next: C++ RKNN runtime service
 ```
 
 Spatial/VLA-style path:

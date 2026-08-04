@@ -562,6 +562,65 @@ This is still a Python baseline, but it now has a realistic postprocess shape
 for the C++ service: threshold candidates early, decode only selected boxes,
 then suppress both high-IoU duplicates and contained same-class boxes.
 
+## Phase 3G: JSONL Spatial Event Stream
+
+The continuous RKNN camera loop now produces event-stream artifacts in addition
+to frame detections and latency metrics. After RK3576 inference artifacts are
+copied back to the Mac workspace, the runner evaluates `configs/spatial_rules.json`
+over every frame and writes:
+
+```text
+runs/rk3576_camera_rknn/yolov8n_rockchip_rk3576_i8_observations.jsonl
+runs/rk3576_camera_rknn/yolov8n_rockchip_rk3576_i8_events.jsonl
+runs/rk3576_camera_rknn/yolov8n_rockchip_rk3576_i8_event_summary.json
+```
+
+The rule evaluator can be rerun without re-running RKNN:
+
+```bash
+make evaluate-rknn-camera-events
+```
+
+Latest verified 60-frame event summary:
+
+```json
+{
+  "observations": 60,
+  "events": 71,
+  "by_rule": {
+    "chair_in_left_work_area": 70,
+    "bottle_in_left_work_area": 1
+  },
+  "by_class": {
+    "chair": 70,
+    "bottle": 1
+  }
+}
+```
+
+Each JSONL event is one independent line containing the frame index, rule id,
+zone id, object class, confidence, and bounding box. This makes the output easy
+to stream into logs, dashboards, tests, or a future service process:
+
+```json
+{
+  "type": "spatial_rule_triggered",
+  "rule_id": "chair_in_left_work_area",
+  "zone_id": "left_work_area",
+  "relation": "intersects",
+  "frame_index": 0,
+  "object": {
+    "class_name": "chair",
+    "confidence": 0.8207
+  }
+}
+```
+
+This step moves the project from raw detection boxes toward application-level
+spatial reasoning. The remaining production step is to keep this schema stable
+while moving capture, RKNN inference, postprocess, and rule evaluation into a
+long-running C++ service.
+
 The dynamic range warning printed by RKNN Runtime is expected for this static
 shape export:
 
