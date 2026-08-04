@@ -83,7 +83,7 @@ static int parse_common_options(int argc, char **argv, int start, PipelineConfig
 
 static void on_frame(const VideoFrame *frame, void *userdata)
 {
-    CaptureOutput *output = static_cast<CaptureOutput *>(userdata);
+    CaptureOutput *output = userdata;
     if (output->frames == 0) {
         output->first_timestamp_us = frame->timestamp_us;
     }

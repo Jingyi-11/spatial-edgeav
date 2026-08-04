@@ -54,7 +54,6 @@ static int xioctl(int fd, unsigned long request, void *argument)
 }
 #endif
 
-#ifndef __linux__
 static size_t simulated_frame_size(const PipelineConfig *config)
 {
     if (config->pixel_format == PIXEL_FORMAT_NV12) {
@@ -77,7 +76,6 @@ static void fill_simulated_yuyv(uint8_t *data, const PipelineConfig *config, uin
         }
     }
 }
-#endif
 
 int camera_open(CameraCapture **camera, const PipelineConfig *config)
 {
@@ -85,7 +83,7 @@ int camera_open(CameraCapture **camera, const PipelineConfig *config)
         return -1;
     }
 
-    CameraCapture *capture = static_cast<CameraCapture *>(calloc(1, sizeof(*capture)));
+    CameraCapture *capture = calloc(1, sizeof(*capture));
     if (!capture) {
         return -1;
     }
@@ -148,7 +146,7 @@ int camera_open(CameraCapture **camera, const PipelineConfig *config)
         return -1;
     }
 
-    capture->buffers = static_cast<CameraBuffer *>(calloc(request.count, sizeof(*capture->buffers)));
+    capture->buffers = calloc(request.count, sizeof(*capture->buffers));
     if (!capture->buffers) {
         camera_close(capture);
         return -1;
@@ -254,14 +252,15 @@ int camera_capture_frames(CameraCapture *camera, FrameCallback callback, void *u
             return -1;
         }
 
-        VideoFrame frame = {};
-        frame.data = static_cast<uint8_t *>(camera->buffers[buffer.index].start);
-        frame.size = buffer.bytesused;
-        frame.width = camera->config.width;
-        frame.height = camera->config.height;
-        frame.pixel_format = camera->config.pixel_format;
-        frame.timestamp_us = monotonic_time_us();
-        frame.sequence = camera->sequence++;
+        VideoFrame frame = {
+            .data = camera->buffers[buffer.index].start,
+            .size = buffer.bytesused,
+            .width = camera->config.width,
+            .height = camera->config.height,
+            .pixel_format = camera->config.pixel_format,
+            .timestamp_us = monotonic_time_us(),
+            .sequence = camera->sequence++,
+        };
         callback(&frame, userdata);
 
         if (xioctl(camera->fd, VIDIOC_QBUF, &buffer) == -1) {
@@ -271,21 +270,22 @@ int camera_capture_frames(CameraCapture *camera, FrameCallback callback, void *u
     }
 #else
     size_t frame_size = simulated_frame_size(&camera->config);
-    uint8_t *data = static_cast<uint8_t *>(malloc(frame_size));
+    uint8_t *data = malloc(frame_size);
     if (!data) {
         return -1;
     }
 
     for (uint32_t captured = 0; captured < camera->config.frames; captured++) {
         fill_simulated_yuyv(data, &camera->config, camera->sequence);
-        VideoFrame frame = {};
-        frame.data = data;
-        frame.size = frame_size;
-        frame.width = camera->config.width;
-        frame.height = camera->config.height;
-        frame.pixel_format = PIXEL_FORMAT_YUYV;
-        frame.timestamp_us = monotonic_time_us();
-        frame.sequence = camera->sequence++;
+        VideoFrame frame = {
+            .data = data,
+            .size = frame_size,
+            .width = camera->config.width,
+            .height = camera->config.height,
+            .pixel_format = PIXEL_FORMAT_YUYV,
+            .timestamp_us = monotonic_time_us(),
+            .sequence = camera->sequence++,
+        };
         callback(&frame, userdata);
         usleep(1000000u / camera->config.fps);
     }

@@ -8,7 +8,7 @@ The repository now contains two complementary layers:
 
 - A verified distributed baseline that already runs across MacBook, RK3576,
   Windows, and WSL.
-- A C++ V4L2 camera pipeline skeleton for the future RK3576/RKNN edge runtime.
+- A C/V4L2 camera pipeline skeleton for the future RK3576/RKNN edge runtime.
 
 ## Verified Pipeline
 
@@ -44,7 +44,7 @@ is designed to demonstrate practical skills instead of a notebook-only demo:
 - Linux device development with SSH, shell scripts, system tools, and logs.
 - V4L2/media-controller camera debugging on ARM Linux.
 - GStreamer/FFmpeg video capture, preview, recording, and streaming.
-- C++ camera pipeline structure with MMAP capture and raw frame handling.
+- C camera pipeline structure with MMAP capture and raw frame handling.
 - Windows/WSL model validation workflow for training, ONNX export, and RKNN
   conversion.
 - RK3576/RK3567 deployment path with RGA, MPP, RKNN, and systemd service work.
@@ -133,7 +133,7 @@ the same output format.
 Generated runtime artifacts are written under `runs/` and are intentionally not
 tracked by Git.
 
-## Quick Start: C++ V4L2 Pipeline
+## Quick Start: C/V4L2 Pipeline
 
 Build on MacBook or Linux:
 
@@ -173,10 +173,10 @@ Capture NV12:
   --output out/rk3567_capture_nv12.yuv
 ```
 
-## Quick Start: C++ Runtime Scaffold
+## Quick Start: C/C++ Runtime Scaffold
 
 Phase 5 starts the migration from the Python RKNN camera loop to a board-side
-C++ runtime. The first scaffold builds `build/edgeav_runtime`, writes
+C/C++ runtime. The first scaffold builds `build/edgeav_runtime`, writes
 heartbeat/report JSON, and can run without touching the camera by using
 synthetic frames:
 
@@ -186,7 +186,7 @@ make run-edgeav-runtime-sim
 cat out/edgeav_runtime_report.json
 ```
 
-Deploy and smoke-test the C++ runtime shell on RK3576:
+Deploy and smoke-test the C/C++ runtime shell on RK3576:
 
 ```bash
 make deploy-cpp-runtime-board
@@ -471,7 +471,7 @@ deployment and quantization plan.
 
 ```text
 configs/
-  camera.conf                    # C++/V4L2 default camera config
+  camera.conf                    # C/V4L2 default camera config
   mac_baseline.yaml              # Mac OpenCV baseline config
   spatial_rules.json             # zones and spatial rule config
 docs/
@@ -518,10 +518,10 @@ scripts/
   wsl_yolo_infer.py
   0*_rk3567_*.sh                 # board-side RK3567/RK3576 helpers
 src/
-  camera_capture.cpp
-  main.cpp
-  pipeline.cpp
-  yuv.cpp
+  camera_capture.c
+  main.c
+  pipeline.c
+  yuv.c
 ```
 
 ## Roadmap
@@ -531,7 +531,7 @@ src/
 3. Add spatial rules: restricted-zone entry, dwell time, line crossing.
 4. Train a small custom person detector on WSL and export ONNX.
 5. Convert ONNX to RKNN with calibration images and document quantization impact.
-6. Implement RK3576 C++ runtime with V4L2/GStreamer capture, RKNN inference,
+6. Implement RK3576 C/C++ runtime with V4L2/GStreamer capture, RKNN inference,
    postprocessing, JSONL logs, and systemd service deployment.
 7. Add audio capture and audio-video event fusion.
 8. Add VLA-style instruction-to-spatial-rule mapping for higher-level control.

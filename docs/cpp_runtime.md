@@ -1,8 +1,8 @@
-# C++ Runtime Migration
+# C/C++ Runtime Migration
 
-Phase 5 starts the migration from the Python RKNN camera loop to a C++
+Phase 5 starts the migration from the Python RKNN camera loop to a C/C++
 runtime. The goal is not to delete Python tooling. Python remains useful for
-training, export, conversion, benchmarking, and report generation. The C++
+training, export, conversion, benchmarking, and report generation. The C/C++
 runtime owns the board-side real-time hot path.
 
 ## Target Runtime Shape
@@ -23,9 +23,6 @@ Implemented:
 
 ```text
 src/edgeav_runtime.cpp
-src/camera_capture.cpp
-src/pipeline.cpp
-src/yuv.cpp
 scripts/deploy_cpp_runtime_to_rk3576.sh
 make edgeav-runtime
 make run-edgeav-runtime-sim
@@ -42,7 +39,7 @@ runtime shell:
 - `report.json` output
 - frame count, bytes processed, elapsed time, and measured FPS
 
-This is intentionally a migration scaffold. It proves the C++ service loop,
+This is intentionally a migration scaffold. It proves the C/C++ service loop,
 build target, board deployment, and JSON observability before moving the RKNN
 hot path.
 
@@ -63,7 +60,7 @@ and RK3576.
 make deploy-cpp-runtime-board
 ```
 
-The deploy target copies the C++ sources to:
+The deploy target copies the C/C++ sources to:
 
 ```text
 /home/kickpi/spatial-edgeav/cpp_runtime_src/
@@ -108,7 +105,7 @@ expose different declarations depending on feature macros and include order.
 ## Why Start With a Runtime Shell
 
 The Python baseline has already proven the AI pipeline. Moving everything to
-C++ at once would make debugging harder because capture, preprocess, RKNN
+C/C++ at once would make debugging harder because capture, preprocess, RKNN
 API calls, output decoding, and service behavior could all fail together.
 
 The staged migration keeps each boundary testable:
@@ -126,7 +123,7 @@ Phase 5F: systemd service replacement for Python loop
 
 ## Phase 5B: RKNN C API Smoke Test
 
-The C++ runtime now has a small `rknn_detector` module:
+The C/C++ runtime now has a small `rknn_detector` module:
 
 ```text
 include/rknn_api_compat.h
