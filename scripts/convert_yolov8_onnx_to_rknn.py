@@ -23,6 +23,11 @@ def main() -> int:
     parser.add_argument("--dataset", type=Path, default=None)
     parser.add_argument("--mean", default="0,0,0")
     parser.add_argument("--std", default="255,255,255")
+    parser.add_argument("--quantized-dtype", default="w8a8")
+    parser.add_argument("--quantized-algorithm", default="normal")
+    parser.add_argument("--quantized-method", default="channel")
+    parser.add_argument("--quantized-hybrid-level", type=int, default=0)
+    parser.add_argument("--auto-hybrid", action="store_true")
     parser.add_argument("--report", type=Path, default=None)
     args = parser.parse_args()
 
@@ -52,6 +57,10 @@ def main() -> int:
         target_platform=args.target,
         mean_values=mean,
         std_values=std,
+        quantized_dtype=args.quantized_dtype,
+        quantized_algorithm=args.quantized_algorithm,
+        quantized_method=args.quantized_method,
+        quantized_hybrid_level=args.quantized_hybrid_level,
         optimization_level=3,
     )
     if ret != 0:
@@ -66,6 +75,7 @@ def main() -> int:
     ret = rknn.build(
         do_quantization=do_quant,
         dataset=str(args.dataset) if args.dataset else None,
+        auto_hybrid=args.auto_hybrid,
     )
     if ret != 0:
         print(f"rknn.build failed: {ret}", file=sys.stderr)
@@ -84,6 +94,11 @@ def main() -> int:
         "target": args.target,
         "quant": args.quant,
         "dataset": str(args.dataset) if args.dataset else None,
+        "quantized_dtype": args.quantized_dtype,
+        "quantized_algorithm": args.quantized_algorithm,
+        "quantized_method": args.quantized_method,
+        "quantized_hybrid_level": args.quantized_hybrid_level,
+        "auto_hybrid": args.auto_hybrid,
         "elapsed_ms": elapsed_ms,
     }
     report_path = args.report or args.out.with_suffix(".report.json")

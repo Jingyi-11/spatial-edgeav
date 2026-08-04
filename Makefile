@@ -9,7 +9,7 @@ LDFLAGS ?=
 SOURCES := src/main.c src/pipeline.c src/camera_capture.c src/yuv.c
 OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 
-.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke setup-rknn-wsl export-onnx collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 compare-rknn-benchmarks compare-rknn-detections
+.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
 
 all: $(TARGET)
 
@@ -43,6 +43,9 @@ setup-rknn-wsl:
 export-onnx:
 	bash scripts/wsl_export_yolov8_onnx.sh
 
+download-rockchip-yolov8n:
+	bash scripts/download_rockchip_yolov8n_onnx.sh
+
 collect-rknn-calib:
 	bash scripts/collect_rknn_calibration_frames.sh
 
@@ -62,6 +65,9 @@ setup-rknn-converter-board:
 convert-rknn-i8-board:
 	bash scripts/rk3576_convert_yolov8_rknn.sh runs/model_exports/yolov8n/yolov8n.onnx i8 rk3576
 
+convert-rockchip-yolov8n-i8-board:
+	bash scripts/rk3576_convert_yolov8_rknn.sh runs/model_exports/rockchip_yolov8n/yolov8n_rockchip.onnx i8 rk3576 runs/model_exports/rockchip_yolov8n
+
 setup-rknn-board:
 	scp scripts/rk3576_setup_rknn_runtime.sh rk3576:/tmp/
 	ssh -t rk3576 "bash /tmp/rk3576_setup_rknn_runtime.sh"
@@ -71,6 +77,9 @@ deploy-rknn-board:
 
 deploy-rknn-board-i8:
 	bash scripts/deploy_rknn_to_rk3576.sh runs/model_exports/yolov8n/yolov8n_rk3576_i8.rknn
+
+deploy-rockchip-yolov8n-i8-board:
+	bash scripts/deploy_rknn_to_rk3576.sh runs/model_exports/rockchip_yolov8n/yolov8n_rockchip_rk3576_i8.rknn
 
 compare-rknn-benchmarks:
 	python3 scripts/compare_rknn_benchmarks.py \
@@ -83,6 +92,12 @@ compare-rknn-detections:
 	  --fp runs/rk3576_board/yolov8n_rk3576_fp_detections.json \
 	  --i8 runs/rk3576_board/yolov8n_rk3576_i8_detections.json \
 	  --out runs/rk3576_board/fp_vs_i8_detections.json
+
+compare-rockchip-i8-detections:
+	python3 scripts/compare_rknn_detections.py \
+	  --fp runs/rk3576_board/yolov8n_rk3576_fp_detections.json \
+	  --i8 runs/rk3576_board/yolov8n_rockchip_rk3576_i8_detections.json \
+	  --out runs/rk3576_board/fp_vs_rockchip_i8_detections.json
 
 clean:
 	rm -rf $(BUILD_DIR) out

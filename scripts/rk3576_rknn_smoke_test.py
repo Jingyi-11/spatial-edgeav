@@ -174,11 +174,27 @@ def nms(detections: list[dict[str, Any]], iou_threshold: float) -> list[dict[str
 def summarize_yolo_output(outputs: list[Any]) -> dict[str, Any]:
     import numpy as np
 
+    tensors = []
+    for idx, output in enumerate(outputs):
+        arr = np.asarray(output)
+        item: dict[str, Any] = {
+            "index": idx,
+            "shape": list(arr.shape),
+            "dtype": str(arr.dtype),
+            "min": round(float(arr.min()), 6),
+            "max": round(float(arr.max()), 6),
+            "nonzero": int(np.count_nonzero(arr)),
+        }
+        if arr.ndim == 4 and arr.shape[1] in (1, 64, 80):
+            item["role_hint"] = {1: "score_sum", 64: "box_distribution", 80: "class_scores"}[arr.shape[1]]
+        tensors.append(item)
+
     pred = np.asarray(outputs[0])
     squeezed = np.squeeze(pred)
     if squeezed.shape[0] != 84 and squeezed.shape[-1] == 84:
         squeezed = squeezed.T
     summary: dict[str, Any] = {
+        "tensors": tensors,
         "shape": list(pred.shape),
         "dtype": str(pred.dtype),
         "min": round(float(pred.min()), 6),
@@ -198,6 +214,180 @@ def summarize_yolo_output(outputs: list[Any]) -> dict[str, Any]:
             "nonzero": int(np.count_nonzero(scores)),
         }
     return summary
+
+
+def softmax_numpy(values: Any, axis: int) -> Any:
+    import numpy as np
+
+    shifted = values - np.max(values, axis=axis, keepdims=True)
+    exp = np.exp(shifted)
+    return exp / np.sum(exp, axis=axis, keepdims=True)
+
+
+def dfl(position: Any) -> Any:
+    import numpy as np
+
+    n, channels, height, width = position.shape
+    bins = channels // 4
+    position = position.reshape(n, 4, bins, height, width)
+    weights = np.arange(bins, dtype=np.float32).reshape(1, 1, bins, 1, 1)
+    return (softmax_numpy(position, axis=2) * weights).sum(axis=2)
+
+
+def box_process(position: Any, image_size: int) -> Any:
+    import numpy as np
+
+    _, _, grid_h, grid_w = position.shape
+    col, row = np.meshgrid(np.arange(grid_w), np.arange(grid_h))
+    grid = np.stack((col, row), axis=0).reshape(1, 2, grid_h, grid_w).astype(np.float32)
+    stride = np.array([image_size / grid_w, image_size / grid_h], dtype=np.float32).reshape(1, 2, 1, 1)
+    distances = dfl(position.astype(np.float32))
+    box_xy = grid + 0.5 - distances[:, 0:2, :, :]
+    box_xy2 = grid + 0.5 + distances[:, 2:4, :, :]
+    return np.concatenate((box_xy * stride, box_xy2 * stride), axis=1)
+
+
+def flatten_hw_channels(tensor: Any) -> Any:
+    import numpy as np
+
+    return np.transpose(tensor, (0, 2, 3, 1)).reshape(-1, tensor.shape[1]).astype(np.float32)
+
+
+def group_rockchip_yolov8_outputs(outputs: list[Any]) -> list[tuple[Any, Any, Any | None]]:
+    import numpy as np
+
+    tensors = [np.asarray(output) for output in outputs]
+    four_dim = [tensor for tensor in tensors if tensor.ndim == 4]
+    groups: list[tuple[Any, Any, Any | None]] = []
+    sizes = sorted({(tensor.shape[2], tensor.shape[3]) for tensor in four_dim}, reverse=True)
+    for height, width in sizes:
+        same_grid = [tensor for tensor in four_dim if tensor.shape[2] == height and tensor.shape[3] == width]
+        box = next((tensor for tensor in same_grid if tensor.shape[1] == 64), None)
+        scores = next((tensor for tensor in same_grid if tensor.shape[1] == 80), None)
+        score_sum = next((tensor for tensor in same_grid if tensor.shape[1] == 1), None)
+        if box is not None and scores is not None:
+            groups.append((box, scores, score_sum))
+    return groups
+
+
+def decode_rockchip_yolov8(
+    outputs: list[Any],
+    image_path: Path,
+    image_size: int,
+    conf_threshold: float,
+    iou_threshold: float,
+    max_detections: int,
+) -> tuple[dict[str, Any], Any]:
+    import cv2
+    import numpy as np
+
+    groups = group_rockchip_yolov8_outputs(outputs)
+    if not groups:
+        raise ValueError("no Rockchip YOLOv8 output groups found")
+
+    image_bgr = cv2.imread(str(image_path))
+    if image_bgr is None:
+        raise ValueError(f"could not decode image: {image_path}")
+    height, width = image_bgr.shape[:2]
+
+    box_arrays = []
+    score_arrays = []
+    for box_tensor, score_tensor, _score_sum in groups:
+        boxes = box_process(box_tensor, image_size)
+        box_arrays.append(flatten_hw_channels(boxes))
+        score_arrays.append(flatten_hw_channels(score_tensor))
+
+    boxes = np.concatenate(box_arrays, axis=0)
+    scores = np.concatenate(score_arrays, axis=0)
+    class_ids = np.argmax(scores, axis=1)
+    confidences = scores[np.arange(scores.shape[0]), class_ids]
+
+    scale_x = width / float(image_size)
+    scale_y = height / float(image_size)
+    detections: list[dict[str, Any]] = []
+    for idx, (box, class_id, confidence) in enumerate(zip(boxes, class_ids, confidences)):
+        confidence = float(confidence)
+        if confidence < conf_threshold:
+            continue
+        x1, y1, x2, y2 = [float(v) for v in box]
+        x1 = max(0.0, min(float(width), x1 * scale_x))
+        y1 = max(0.0, min(float(height), y1 * scale_y))
+        x2 = max(0.0, min(float(width), x2 * scale_x))
+        y2 = max(0.0, min(float(height), y2 * scale_y))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        detections.append(
+            {
+                "id": idx,
+                "class_id": int(class_id),
+                "class_name": COCO80[int(class_id)] if int(class_id) < len(COCO80) else str(class_id),
+                "confidence": round(confidence, 4),
+                "bbox_xyxy": [round(v, 2) for v in [x1, y1, x2, y2]],
+                "bbox_xywh": [round(x1, 2), round(y1, 2), round(x2 - x1, 2), round(y2 - y1, 2)],
+            }
+        )
+
+    detections = nms(detections, iou_threshold)[:max_detections]
+    for idx, det in enumerate(detections):
+        det["id"] = idx
+
+    annotated = image_bgr.copy()
+    for det in detections:
+        x1, y1, x2, y2 = [int(round(v)) for v in det["bbox_xyxy"]]
+        label = f"{det['class_name']} {det['confidence']:.2f}"
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 180, 255), 2)
+        cv2.putText(
+            annotated,
+            label,
+            (x1, max(20, y1 - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 180, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+    payload = {
+        "source": str(image_path),
+        "image": {"width": width, "height": height},
+        "model": "rknn-yolov8n-rockchip-optimized",
+        "device": "rk3576-rknn",
+        "postprocess": {
+            "type": "rockchip_yolov8_optimized_head",
+            "output_groups": len(groups),
+            "confidence_threshold": conf_threshold,
+            "iou_threshold": iou_threshold,
+            "max_detections": max_detections,
+        },
+        "detections": detections,
+    }
+    return payload, annotated
+
+
+def decode_outputs(
+    outputs: list[Any],
+    image_path: Path,
+    image_size: int,
+    conf_threshold: float,
+    iou_threshold: float,
+    max_detections: int,
+) -> tuple[dict[str, Any], Any]:
+    import numpy as np
+
+    if group_rockchip_yolov8_outputs(outputs):
+        return decode_rockchip_yolov8(
+            outputs,
+            image_path,
+            image_size,
+            conf_threshold,
+            iou_threshold,
+            max_detections,
+        )
+    pred = np.asarray(outputs[0])
+    squeezed = np.squeeze(pred)
+    if squeezed.shape[0] == 84 or squeezed.shape[-1] == 84:
+        return decode_yolov8(outputs, image_path, image_size, conf_threshold, iou_threshold, max_detections)
+    raise ValueError(f"unsupported output shapes: {[list(np.asarray(output).shape) for output in outputs]}")
 
 
 def decode_yolov8(
@@ -384,7 +574,7 @@ def main() -> int:
     detections_payload = None
     if args.detections and args.image and outputs:
         try:
-            detections_payload, annotated = decode_yolov8(
+            detections_payload, annotated = decode_outputs(
                 outputs,
                 args.image,
                 args.image_size,

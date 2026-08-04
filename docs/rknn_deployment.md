@@ -291,6 +291,97 @@ are all zero after runtime output conversion. The next quantization task is to
 fix RKNN output dtype/quantization settings and rerun the FP vs INT8 detection
 comparison.
 
+## Phase 3C: Rockchip Optimized YOLOv8 INT8
+
+The accepted INT8 path uses the Rockchip model-zoo YOLOv8 ONNX export rather
+than the raw Ultralytics one-output export. Rockchip's YOLOv8 example explains
+that its ONNX graph is optimized for RKNN deployment and splits the detection
+head into three branches per feature scale:
+
+```text
+box distribution: [1, 64, H, W]
+class scores:     [1, 80, H, W]
+score sum:        [1, 1, H, W]
+```
+
+For YOLOv8n this produces 9 RKNN outputs across 80x80, 40x40, and 20x20
+feature maps. The board smoke-test helper now detects these output groups by
+shape, runs NumPy DFL decoding for the 64-channel box distribution, applies
+class-wise NMS, and writes the same `detections.json` and `annotated.jpg`
+artifacts as the raw-head path.
+
+Reproducible commands:
+
+```bash
+make download-rockchip-yolov8n
+make convert-rockchip-yolov8n-i8-board
+make deploy-rockchip-yolov8n-i8-board
+make compare-rockchip-i8-detections
+```
+
+Verified RK3576 Rockchip optimized INT8 result:
+
+```json
+{
+  "status": "ok",
+  "model_size_bytes": 6461835,
+  "runs": 30,
+  "latency_ms": {
+    "mean": 62.265,
+    "median": 67.365,
+    "p95": 77.038,
+    "min": 46.35,
+    "max": 81.474
+  },
+  "fps": 16.06,
+  "output_shapes": [
+    [1, 64, 80, 80],
+    [1, 80, 80, 80],
+    [1, 1, 80, 80],
+    [1, 64, 40, 40],
+    [1, 80, 40, 40],
+    [1, 1, 40, 40],
+    [1, 64, 20, 20],
+    [1, 80, 20, 20],
+    [1, 1, 20, 20]
+  ],
+  "class_score_max": 0.415511,
+  "detections": {
+    "count": 2
+  }
+}
+```
+
+Detection comparison against the FP raw-head reference on the same camera
+frame:
+
+```json
+{
+  "fp": {
+    "count": 3,
+    "by_class": {
+      "person": 1,
+      "surfboard": 1,
+      "bottle": 1
+    }
+  },
+  "i8": {
+    "count": 2,
+    "by_class": {
+      "person": 1,
+      "bottle": 1
+    }
+  },
+  "status": "mismatch"
+}
+```
+
+This is the first deployable INT8 baseline: it keeps the 2x latency win of
+INT8, reduces the model from 13.4 MB FP to 6.46 MB, and preserves meaningful
+class scores and bounding boxes. It still needs calibration-set and threshold
+tuning because the FP reference's lower-confidence `surfboard` detection is
+not recovered at the current `0.25` threshold.
+
 The dynamic range warning printed by RKNN Runtime is expected for this static
 shape export:
 

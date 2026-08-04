@@ -8,12 +8,18 @@ TARGET="${3:-rk3576}"
 LOCAL_OUT="${4:-runs/model_exports/yolov8n}"
 LOCAL_CALIB_DIR="${LOCAL_CALIB_DIR:-runs/model_exports/yolov8n/calib}"
 REMOTE_EXPORT_ROOT="${REMOTE_EXPORT_ROOT:-/home/kickpi/spatial-edgeav/exports/yolov8n}"
+RKNN_QUANTIZED_DTYPE="${RKNN_QUANTIZED_DTYPE:-w8a8}"
+RKNN_QUANTIZED_ALGORITHM="${RKNN_QUANTIZED_ALGORITHM:-normal}"
+RKNN_QUANTIZED_METHOD="${RKNN_QUANTIZED_METHOD:-channel}"
+RKNN_QUANTIZED_HYBRID_LEVEL="${RKNN_QUANTIZED_HYBRID_LEVEL:-0}"
+RKNN_AUTO_HYBRID="${RKNN_AUTO_HYBRID:-0}"
+PROFILE_SUFFIX="${PROFILE_SUFFIX:-}"
 SSH_RETRIES="${SSH_RETRIES:-3}"
 SSH_RETRY_DELAY_SEC="${SSH_RETRY_DELAY_SEC:-3}"
 
 MODEL_STEM="$(basename "${LOCAL_ONNX}" .onnx)"
-REMOTE_RKNN="${REMOTE_EXPORT_ROOT}/${MODEL_STEM}_${TARGET}_${QUANT}.rknn"
-REMOTE_REPORT="${REMOTE_EXPORT_ROOT}/${MODEL_STEM}_${TARGET}_${QUANT}.report.json"
+REMOTE_RKNN="${REMOTE_EXPORT_ROOT}/${MODEL_STEM}_${TARGET}_${QUANT}${PROFILE_SUFFIX}.rknn"
+REMOTE_REPORT="${REMOTE_EXPORT_ROOT}/${MODEL_STEM}_${TARGET}_${QUANT}${PROFILE_SUFFIX}.report.json"
 REMOTE_DATASET="${REMOTE_EXPORT_ROOT}/calib/dataset.txt"
 
 retry_command() {
@@ -56,6 +62,11 @@ retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   "${BOARD_HOST}:${REMOTE_EXPORT_ROOT}/"
 
 DATASET_ARG=""
+AUTO_HYBRID_ARG=""
+if [[ "${RKNN_AUTO_HYBRID}" == "1" ]]; then
+  AUTO_HYBRID_ARG="--auto-hybrid"
+fi
+
 if [[ "${QUANT}" == "i8" ]]; then
   echo "Copying calibration images to RK3576..."
   retry_command scp -r -o BatchMode=yes -o ConnectTimeout=8 \
@@ -74,7 +85,12 @@ retry_command ssh -o BatchMode=yes -o ConnectTimeout=8 "${BOARD_HOST}" \
      --out '${REMOTE_RKNN}' \
      --target '${TARGET}' \
      --quant '${QUANT}' \
+     --quantized-dtype '${RKNN_QUANTIZED_DTYPE}' \
+     --quantized-algorithm '${RKNN_QUANTIZED_ALGORITHM}' \
+     --quantized-method '${RKNN_QUANTIZED_METHOD}' \
+     --quantized-hybrid-level '${RKNN_QUANTIZED_HYBRID_LEVEL}' \
      ${DATASET_ARG} \
+     ${AUTO_HYBRID_ARG} \
      --report '${REMOTE_REPORT}'"
 
 echo "Copying RKNN artifacts back to Mac..."

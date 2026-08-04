@@ -262,6 +262,17 @@ make compare-rknn-benchmarks
 make compare-rknn-detections
 ```
 
+Rockchip's YOLOv8 model zoo provides an RKNN-friendly ONNX graph whose
+detection head is split into box distribution, class score, and score-sum
+branches. Use it for the accepted INT8 deployment profile:
+
+```bash
+make download-rockchip-yolov8n
+make convert-rockchip-yolov8n-i8-board
+make deploy-rockchip-yolov8n-i8-board
+make compare-rockchip-i8-detections
+```
+
 Verified RK3576 FP vs INT8 baseline:
 
 ```text
@@ -283,9 +294,19 @@ INT8 diagnosis: bbox branch nonzero, class-score branch all zero
 ```
 
 The FP model now produces board-side `detections.json` and `annotated.jpg`.
-The INT8 model runs faster but currently returns zero class scores after
-quantization, so it is kept as an optimization experiment until output
-quantization settings are corrected.
+The original one-output INT8 graph runs faster but returns zero class scores
+after quantization, so it is kept as a documented failure case.
+
+Accepted RK3576 INT8 profile using the Rockchip optimized YOLOv8n ONNX:
+
+```text
+Output tensors: 9 tensors, 3 scales of box distribution / class scores / score sum
+INT8 model size: 6,461,835 bytes
+Latency: mean 62.265 ms, 16.060 FPS
+INT8 detections: person 0.416, bottle 0.353
+FP reference: person 0.406, surfboard 0.365, bottle 0.343
+Status: deployable INT8 path validated; continue tuning calibration and thresholding
+```
 
 Verified outputs are generated locally under `runs/model_exports/yolov8n/`:
 
