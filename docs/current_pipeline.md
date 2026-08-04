@@ -189,10 +189,22 @@ runs/edgeav_remote_yolo/<timestamp>/
 The JSON outputs make the pipeline easier to benchmark and extend into spatial
 rules, tracking, and event reporting.
 
-The script starts with SSH preflight checks. If it reports that `wslbox` is not
-reachable, check the Windows PC first: Tailscale must be online, the machine
-must not be asleep, and the WSL SSH portproxy on port `2222` must still point to
-the current WSL IP.
+The script starts with SSH preflight checks and retries transient SSH/SCP
+failures. If it still reports that `wslbox` is not reachable, check the Windows
+PC first: Tailscale must be online, the machine must not be asleep, and the WSL
+SSH portproxy on port `2222` must still point to the current WSL IP.
+
+If direct WSL SSH is unstable, the script falls back to a Windows bridge mode:
+
+```text
+MacBook -> ssh winbox -> wsl.exe -d Ubuntu-22.04 -> YOLO helper
+```
+
+Both modes use the same WSL-visible workspace under:
+
+```text
+/mnt/c/Users/HP/edgeav_data/edgeav_remote_yolo/
+```
 
 ## 6. What This Proves
 

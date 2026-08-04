@@ -126,6 +126,10 @@ This captures a fresh RK3576 camera frame, copies it to WSL, runs YOLOv8n,
 copies the annotated image and JSON outputs back to Mac, and records per-step
 latency under `runs/edgeav_remote_yolo/<timestamp>/`.
 
+The script prefers direct `ssh wslbox`. If WSL port `2222` is unstable after
+Windows wakes up, it can fall back to `ssh winbox` plus `wsl.exe` while keeping
+the same output format.
+
 Generated runtime artifacts are written under `runs/` and are intentionally not
 tracked by Git.
 
@@ -230,6 +234,7 @@ scripts/
   rk3576_stream_baseline.sh
   run_remote_yolo_pipeline.sh
   wsl_yolo_smoke_test.sh
+  wsl_yolo_infer.py
   0*_rk3567_*.sh                 # board-side RK3567/RK3576 helpers
 src/
   camera_capture.c
