@@ -123,8 +123,8 @@ make edgeav-smoke
 ```
 
 This captures a fresh RK3576 camera frame, copies it to WSL, runs YOLOv8n,
-copies the annotated image and JSON outputs back to Mac, and records per-step
-latency under `runs/edgeav_remote_yolo/<timestamp>/`.
+copies the annotated image and JSON outputs back to Mac, evaluates spatial
+rules, and records per-step latency under `runs/edgeav_remote_yolo/<timestamp>/`.
 
 The script prefers direct `ssh wslbox`. If WSL port `2222` is unstable after
 Windows wakes up, it can fall back to `ssh winbox` plus `wsl.exe` while keeping
@@ -217,6 +217,7 @@ Record audio and video:
 configs/
   camera.conf                    # C/V4L2 default camera config
   mac_baseline.yaml              # Mac OpenCV baseline config
+  spatial_rules.json             # zones and spatial rule config
 docs/
   current_pipeline.md            # verified end-to-end pipeline
   macbook_remote_setup.md        # SSH/Tailscale remote development setup
@@ -228,6 +229,7 @@ include/
   pipeline.h
   yuv.h
 scripts/
+  evaluate_spatial_rules.py
   mac_camera_baseline.py
   rk3576_camera_smoke_test.sh
   rk3576_camera_tune.sh

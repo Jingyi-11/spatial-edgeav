@@ -170,6 +170,7 @@ RK3576 fresh frame capture
   -> copy input.jpg to WSL
   -> YOLOv8n CPU inference in WSL
   -> annotated.jpg + detections.json + inference.json
+  -> observation.json + events.json from spatial rules
   -> copy results back to Mac
   -> write latency.json and summary.txt
 ```
@@ -182,12 +183,16 @@ runs/edgeav_remote_yolo/<timestamp>/
   annotated.jpg
   detections.json
   inference.json
+  observation.json
+  events.json
   latency.json
   summary.txt
 ```
 
-The JSON outputs make the pipeline easier to benchmark and extend into spatial
-rules, tracking, and event reporting.
+The JSON outputs make the pipeline easier to benchmark and extend into tracking
+and event reporting. `observation.json` is the detector-independent scene state;
+`events.json` records spatial rule hits such as a person intersecting a defined
+work area.
 
 The script starts with SSH preflight checks and retries transient SSH/SCP
 failures. If it still reports that `wslbox` is not reachable, check the Windows

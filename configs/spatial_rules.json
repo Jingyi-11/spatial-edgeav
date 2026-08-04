@@ -1,0 +1,44 @@
+{
+  "zones": [
+    {
+      "id": "left_work_area",
+      "name": "Left work area",
+      "polygon_norm": [
+        [0.0, 0.35],
+        [0.42, 0.35],
+        [0.42, 0.92],
+        [0.0, 0.92]
+      ]
+    },
+    {
+      "id": "screen_area",
+      "name": "Screen area",
+      "polygon_norm": [
+        [0.42, 0.42],
+        [0.58, 0.42],
+        [0.58, 0.66],
+        [0.42, 0.66]
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "person_in_left_work_area",
+      "type": "zone_intersection",
+      "class_name": "person",
+      "zone_id": "left_work_area",
+      "min_confidence": 0.35,
+      "severity": "warning",
+      "message": "Person detected inside the left work area."
+    },
+    {
+      "id": "tv_in_screen_area",
+      "type": "zone_intersection",
+      "class_name": "tv",
+      "zone_id": "screen_area",
+      "min_confidence": 0.35,
+      "severity": "info",
+      "message": "Screen-like object detected in the screen area."
+    }
+  ]
+}

@@ -22,6 +22,8 @@ LOCAL_INPUT="${RUN_DIR}/input.jpg"
 LOCAL_ANNOTATED="${RUN_DIR}/annotated.jpg"
 LOCAL_DETECTIONS="${RUN_DIR}/detections.json"
 LOCAL_INFERENCE="${RUN_DIR}/inference.json"
+LOCAL_OBSERVATION="${RUN_DIR}/observation.json"
+LOCAL_EVENTS="${RUN_DIR}/events.json"
 LOCAL_LATENCY="${RUN_DIR}/latency.json"
 LOCAL_SUMMARY="${RUN_DIR}/summary.txt"
 
@@ -197,6 +199,11 @@ fi
 run_step prepare_model_workspace prepare_model_workspace
 run_step infer_wsl run_model_inference
 run_step pull_results_to_mac pull_model_results
+run_step evaluate_spatial_rules python3 scripts/evaluate_spatial_rules.py \
+  --detections "${LOCAL_DETECTIONS}" \
+  --rules configs/spatial_rules.json \
+  --observation-out "${LOCAL_OBSERVATION}" \
+  --events-out "${LOCAL_EVENTS}"
 
 TOTAL_END_MS="$(now_ms)"
 TOTAL_MS="$((TOTAL_END_MS - TOTAL_START_MS))"
@@ -231,22 +238,24 @@ payload = {
 latency_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 PY
 
-python3 - "${LOCAL_DETECTIONS}" "${LOCAL_LATENCY}" "${LOCAL_SUMMARY}" <<'PY'
+python3 - "${LOCAL_DETECTIONS}" "${LOCAL_EVENTS}" "${LOCAL_LATENCY}" "${LOCAL_SUMMARY}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 detections = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-latency = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+events = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+latency = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
 classes = ", ".join(d["class_name"] for d in detections.get("detections", []))
 lines = [
     "Spatial EdgeAV remote YOLO pipeline summary",
     f"model_mode={latency.get('model_mode')}",
     f"objects={len(detections.get('detections', []))}",
+    f"events={len(events.get('events', []))}",
     f"total_ms={latency.get('total_ms')}",
     f"classes={classes}",
 ]
-Path(sys.argv[3]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+Path(sys.argv[4]).write_text("\n".join(lines) + "\n", encoding="utf-8")
 print("\n".join(lines))
 PY
 
@@ -255,5 +264,7 @@ echo "  ${LOCAL_INPUT}"
 echo "  ${LOCAL_ANNOTATED}"
 echo "  ${LOCAL_DETECTIONS}"
 echo "  ${LOCAL_INFERENCE}"
+echo "  ${LOCAL_OBSERVATION}"
+echo "  ${LOCAL_EVENTS}"
 echo "  ${LOCAL_LATENCY}"
 echo "  ${LOCAL_SUMMARY}"
