@@ -1,9 +1,6 @@
 #include "rknn_detector.h"
 #include "rknn_api_compat.h"
-
-extern "C" {
 #include "pipeline.h"
-}
 
 #include <dlfcn.h>
 #include <errno.h>

@@ -1,29 +1,22 @@
-CC ?= cc
 CXX ?= c++
 BUILD_DIR := build
 TARGET := $(BUILD_DIR)/embedded_camera
 EDGEAV_RUNTIME_TARGET := $(BUILD_DIR)/edgeav_runtime
 
-CFLAGS ?= -O2 -g
-CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -Iinclude
 CXXFLAGS ?= -O2 -g
 CXXFLAGS += -std=c++17 -Wall -Wextra -Wpedantic -Iinclude
 LDFLAGS ?=
 
-SOURCES := src/main.c src/pipeline.c src/camera_capture.c src/yuv.c
-OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
-RUNTIME_C_OBJECTS := $(BUILD_DIR)/pipeline.o $(BUILD_DIR)/camera_capture.o $(BUILD_DIR)/yuv.o
-RUNTIME_CPP_OBJECTS := $(BUILD_DIR)/edgeav_runtime.o $(BUILD_DIR)/rknn_detector.o
+SOURCES := src/main.cpp src/pipeline.cpp src/camera_capture.cpp src/yuv.cpp
+OBJECTS := $(SOURCES:src/%.cpp=$(BUILD_DIR)/%.o)
+RUNTIME_OBJECTS := $(BUILD_DIR)/pipeline.o $(BUILD_DIR)/camera_capture.o $(BUILD_DIR)/yuv.o $(BUILD_DIR)/edgeav_runtime.o $(BUILD_DIR)/rknn_detector.o
 
 .PHONY: all clean run-sim probe rk3567-sim edgeav-runtime run-edgeav-runtime-sim deploy-cpp-runtime-board edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board deploy-onnx-cpu-board deploy-rknn-service-board install-rknn-health-timer-board collect-rknn-service-snapshot profile-rknn-service check-rknn-service-health run-rknn-camera-board evaluate-rknn-camera-events benchmark-matrix compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
 
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
-	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/%.o: src/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CXX) $(OBJECTS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/%.o: src/%.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -36,8 +29,8 @@ out:
 
 edgeav-runtime: $(EDGEAV_RUNTIME_TARGET)
 
-$(EDGEAV_RUNTIME_TARGET): $(RUNTIME_C_OBJECTS) $(RUNTIME_CPP_OBJECTS)
-	$(CXX) $(RUNTIME_C_OBJECTS) $(RUNTIME_CPP_OBJECTS) $(LDFLAGS) -ldl -o $@
+$(EDGEAV_RUNTIME_TARGET): $(RUNTIME_OBJECTS)
+	$(CXX) $(RUNTIME_OBJECTS) $(LDFLAGS) -ldl -o $@
 
 run-edgeav-runtime-sim: $(EDGEAV_RUNTIME_TARGET) out
 	$(EDGEAV_RUNTIME_TARGET) --simulate --width 1280 --height 720 --fps 30 --frames 30 --format MJPEG --report out/edgeav_runtime_report.json --heartbeat out/edgeav_runtime_heartbeat.json

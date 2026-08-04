@@ -24,21 +24,21 @@ retry_command() {
   done
 }
 
-echo "Preparing RK3576 C/C++ runtime workspace..."
+echo "Preparing RK3576 C++ runtime workspace..."
 retry_command ssh -o BatchMode=yes -o ConnectTimeout=8 "${BOARD_HOST}" \
   "mkdir -p '${REMOTE_SRC_DIR}/src' '${REMOTE_SRC_DIR}/include' '${REMOTE_RUN_DIR}'"
 
-echo "Copying C/C++ runtime sources..."
+echo "Copying C++ runtime sources..."
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   Makefile \
   "${BOARD_HOST}:${REMOTE_SRC_DIR}/"
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   src/edgeav_runtime.cpp \
   src/rknn_detector.cpp \
-  src/camera_capture.c \
-  src/pipeline.c \
-  src/yuv.c \
-  src/main.c \
+  src/camera_capture.cpp \
+  src/pipeline.cpp \
+  src/yuv.cpp \
+  src/main.cpp \
   "${BOARD_HOST}:${REMOTE_SRC_DIR}/src/"
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   include/camera_capture.h \
@@ -84,7 +84,7 @@ else
   echo "Skipping RKNN C API smoke test; model not found: ${REMOTE_RKNN_MODEL}" >&2
 fi
 
-echo "Copying RK3576 C/C++ runtime report back to Mac..."
+echo "Copying RK3576 C++ runtime report back to Mac..."
 LOCAL_OUT_DIR="runs/rk3576_cpp_runtime"
 mkdir -p "${LOCAL_OUT_DIR}"
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \

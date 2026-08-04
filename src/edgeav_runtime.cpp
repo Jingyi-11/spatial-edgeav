@@ -6,11 +6,9 @@
 #include <time.h>
 #include <unistd.h>
 
-extern "C" {
 #include "camera_capture.h"
 #include "pipeline.h"
 #include "rknn_detector.h"
-}
 
 namespace {
 

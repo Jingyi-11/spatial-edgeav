@@ -3,10 +3,6 @@
 
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 typedef struct RknnSmokeConfig {
     const char *model_path;
     const char *library_path;
@@ -17,9 +13,5 @@ typedef struct RknnSmokeConfig {
 } RknnSmokeConfig;
 
 int rknn_detector_smoke(const RknnSmokeConfig *config);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif
