@@ -552,6 +552,7 @@ void write_report(
     fprintf(file, "  \"stage\": \"%s\",\n", stage);
     fprintf(file, "  \"model_path\": \"%s\",\n", config->model_path);
     fprintf(file, "  \"library_path\": \"%s\",\n", config->library_path);
+    fprintf(file, "  \"input_source\": \"%s\",\n", config->input_source ? config->input_source : "zero_filled_synthetic");
     fprintf(file, "  \"runs\": %u,\n", config->runs);
     fprintf(file, "  \"warmup\": %u,\n", config->warmup);
     fprintf(file, "  \"sdk\": {\"api_version\": \"%s\", \"drv_version\": \"%s\"},\n", version->api_version, version->drv_version);
@@ -688,6 +689,10 @@ int rknn_detector_smoke(const RknnSmokeConfig *config)
         api.destroy(ctx);
         unload_api(&api);
         return 7;
+    }
+    if (config->input_data && config->input_size > 0) {
+        uint32_t copy_size = config->input_size < input_size ? config->input_size : input_size;
+        memcpy(input_buffer, config->input_data, copy_size);
     }
 
     RknnInput input;

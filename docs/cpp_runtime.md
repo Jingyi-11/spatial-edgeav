@@ -238,6 +238,62 @@ scripts/rk3576_rknn_camera_loop.py
 systemd/spatial-edgeav-rknn.service
 ```
 
-The next engineering step is Phase 5D: feed real V4L2 camera frames through the
-C++ runtime, convert/resize them to the RKNN input tensor, and compare C++
-detections against the current Python live-camera service.
+## Phase 5D: Real V4L2 Frame Input Path
+
+The C/C++ runtime now has the first real-camera input path for RKNN inference:
+
+```text
+V4L2 YUYV frame
+  -> nearest-neighbor resize
+  -> YUV to RGB conversion
+  -> NHWC uint8 640x640 RKNN input tensor
+  -> RKNN C API inference
+  -> C++ YOLOv8 optimized-head postprocess
+  -> RKNN JSON report with input_source=v4l2_yuyv_rgb_resized
+```
+
+Implemented files:
+
+```text
+include/yuv.h
+src/yuv.c
+include/rknn_detector.h
+src/rknn_detector.cpp
+src/edgeav_runtime.cpp
+Makefile
+```
+
+The runtime still supports the zero-filled synthetic RKNN smoke path. When a
+real V4L2 YUYV camera frame is available, it captures a frame, converts it into
+the RKNN input tensor, and passes that buffer to the same RKNN/postprocess path.
+
+Run after deploying the C/C++ runtime:
+
+```bash
+make deploy-cpp-runtime-board
+make run-cpp-live-yuyv-board
+```
+
+Current validation status:
+
+```text
+Mac build: ok
+Mac simulated runtime: ok
+RK3576 deploy build: ok
+RK3576 synthetic RKNN smoke: ok
+RK3576 live YUYV camera test: blocked by active Python systemd service holding /dev/video73
+```
+
+Before running the live C++ camera test, stop the Python service that owns the
+camera device:
+
+```bash
+sudo systemctl stop spatial-edgeav-rknn.service
+make run-cpp-live-yuyv-board
+sudo systemctl start spatial-edgeav-rknn.service
+```
+
+The next engineering step is to validate the live C++ YUYV path with the Python
+service stopped, then add MJPEG decode or a GStreamer/RGA preprocessing path so
+the runtime can use the same high-FPS camera format as the existing Python
+service.

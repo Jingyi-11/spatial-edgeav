@@ -11,6 +11,9 @@ typedef struct RknnSmokeConfig {
     const char *model_path;
     const char *library_path;
     const char *report_path;
+    const uint8_t *input_data;
+    uint32_t input_size;
+    const char *input_source;
     uint32_t runs;
     uint32_t warmup;
     uint8_t want_float;

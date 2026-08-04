@@ -10,6 +10,7 @@ extern "C" {
 #include "camera_capture.h"
 #include "pipeline.h"
 #include "rknn_detector.h"
+#include "yuv.h"
 }
 
 namespace {
@@ -40,7 +41,17 @@ struct RuntimeStats {
     uint64_t end_us = 0;
     uint64_t last_sequence = 0;
     bool capture_ok = true;
+    bool rknn_attempted = false;
+    int rknn_result = 0;
     char error[128] = {0};
+};
+
+struct RuntimeContext {
+    const RuntimeConfig *config = nullptr;
+    RuntimeStats *stats = nullptr;
+    uint8_t *rknn_input = nullptr;
+    size_t rknn_input_size = 0;
+    bool rknn_input_ready = false;
 };
 
 void print_usage(const char *program)
@@ -180,7 +191,8 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
 
 void on_frame(const VideoFrame *frame, void *userdata)
 {
-    auto *stats = static_cast<RuntimeStats *>(userdata);
+    auto *context = static_cast<RuntimeContext *>(userdata);
+    RuntimeStats *stats = context->stats;
     if (stats->frames == 0) {
         stats->first_timestamp_us = frame->timestamp_us;
     }
@@ -188,6 +200,19 @@ void on_frame(const VideoFrame *frame, void *userdata)
     stats->last_sequence = frame->sequence;
     stats->frames++;
     stats->bytes += frame->size;
+
+    if (context->config->rknn_model_path && context->rknn_input && !context->rknn_input_ready && frame->pixel_format == PIXEL_FORMAT_YUYV) {
+        if (yuyv_to_rgb_resized(
+                frame->data,
+                frame->size,
+                frame->width,
+                frame->height,
+                context->rknn_input,
+                640,
+                640) == 0) {
+            context->rknn_input_ready = true;
+        }
+    }
 }
 
 size_t simulated_frame_size(const RuntimeConfig &config)
@@ -221,7 +246,14 @@ int run_simulated(const RuntimeConfig &config, RuntimeStats *stats)
             now,
             index,
         };
-        on_frame(&frame, stats);
+        RuntimeContext context = {
+            &config,
+            stats,
+            nullptr,
+            0,
+            false,
+        };
+        on_frame(&frame, &context);
         write_json(config.heartbeat_path, config, *stats, "running");
         usleep(sleep_us);
     }
@@ -248,13 +280,58 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
     }
 
     int result = 0;
-    if (camera_start(camera) != 0 || camera_capture_frames(camera, on_frame, stats) != 0) {
+    RuntimeContext context = {
+        &config,
+        stats,
+        nullptr,
+        0,
+        false,
+    };
+    uint8_t *rknn_input = nullptr;
+    if (config.rknn_model_path && config.pixel_format == PIXEL_FORMAT_YUYV) {
+        context.rknn_input_size = 640u * 640u * 3u;
+        rknn_input = static_cast<uint8_t *>(calloc(context.rknn_input_size, 1));
+        context.rknn_input = rknn_input;
+        if (!rknn_input) {
+            snprintf(stats->error, sizeof(stats->error), "rknn input allocation failed");
+            camera_close(camera);
+            return -1;
+        }
+    }
+
+    if (camera_start(camera) != 0 || camera_capture_frames(camera, on_frame, &context) != 0) {
         snprintf(stats->error, sizeof(stats->error), "camera capture failed");
         result = -1;
     }
 
     camera_stop(camera);
     camera_close(camera);
+
+    if (result == 0 && config.rknn_model_path && context.rknn_input_ready) {
+        RknnSmokeConfig rknn_config = {
+            config.rknn_model_path,
+            config.rknn_library_path,
+            config.rknn_report_path,
+            context.rknn_input,
+            static_cast<uint32_t>(context.rknn_input_size),
+            "v4l2_yuyv_rgb_resized",
+            config.rknn_runs,
+            config.rknn_warmup,
+            0,
+        };
+        int rknn_result = rknn_detector_smoke(&rknn_config);
+        stats->rknn_attempted = true;
+        stats->rknn_result = rknn_result;
+        if (rknn_result != 0) {
+            snprintf(stats->error, sizeof(stats->error), "rknn_detector_smoke failed");
+            result = rknn_result;
+        }
+    } else if (result == 0 && config.rknn_model_path && config.pixel_format != PIXEL_FORMAT_YUYV) {
+        snprintf(stats->error, sizeof(stats->error), "rknn live input currently requires YUYV");
+        result = -1;
+    }
+
+    free(rknn_input);
     return result;
 }
 
@@ -279,16 +356,24 @@ int main(int argc, char **argv)
     write_json(config.report_path, config, stats, status);
 
     int rknn_result = 0;
-    if (config.rknn_model_path) {
+    bool rknn_attempted = false;
+    if (config.rknn_model_path && config.simulate) {
         RknnSmokeConfig rknn_config = {
             config.rknn_model_path,
             config.rknn_library_path,
             config.rknn_report_path,
+            nullptr,
+            0,
+            "zero_filled_synthetic",
             config.rknn_runs,
             config.rknn_warmup,
             0,
         };
         rknn_result = rknn_detector_smoke(&rknn_config);
+        rknn_attempted = true;
+    } else if (config.rknn_model_path && stats.rknn_attempted) {
+        rknn_result = stats.rknn_result;
+        rknn_attempted = true;
     }
 
     printf("edgeav_runtime status=%s frames=%llu fps=%.3f report=%s heartbeat=%s",
@@ -297,8 +382,10 @@ int main(int argc, char **argv)
                 fps_from_stats(stats),
                 config.report_path,
                 config.heartbeat_path);
-    if (config.rknn_model_path) {
+    if (config.rknn_model_path && rknn_attempted) {
         printf(" rknn_status=%s rknn_report=%s", rknn_result == 0 ? "ok" : "error", config.rknn_report_path);
+    } else if (config.rknn_model_path) {
+        printf(" rknn_status=skipped");
     }
     printf("\n");
     if (result != 0) {

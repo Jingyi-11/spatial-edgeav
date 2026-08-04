@@ -213,6 +213,16 @@ mean inference: 34.466 ms
 report: runs/rk3576_cpp_runtime/edgeav_runtime_rknn_report.json
 ```
 
+The C/C++ runtime also has an initial real V4L2 YUYV input path:
+
+```bash
+make run-cpp-live-yuyv-board
+```
+
+This converts a captured YUYV frame into an RGB `640x640` RKNN input tensor and
+uses the same C++ YOLOv8 postprocess path. Stop the Python systemd camera
+service first if it is holding `/dev/video73`.
+
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
 ## RK3567/RK3576 Media Scripts

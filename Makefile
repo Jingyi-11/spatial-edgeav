@@ -15,7 +15,7 @@ OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 RUNTIME_C_OBJECTS := $(BUILD_DIR)/pipeline.o $(BUILD_DIR)/camera_capture.o $(BUILD_DIR)/yuv.o
 RUNTIME_CPP_OBJECTS := $(BUILD_DIR)/edgeav_runtime.o $(BUILD_DIR)/rknn_detector.o
 
-.PHONY: all clean run-sim probe rk3567-sim edgeav-runtime run-edgeav-runtime-sim deploy-cpp-runtime-board edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board deploy-onnx-cpu-board deploy-rknn-service-board install-rknn-health-timer-board collect-rknn-service-snapshot profile-rknn-service check-rknn-service-health run-rknn-camera-board evaluate-rknn-camera-events benchmark-matrix compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
+.PHONY: all clean run-sim probe rk3567-sim edgeav-runtime run-edgeav-runtime-sim deploy-cpp-runtime-board run-cpp-live-yuyv-board edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board deploy-onnx-cpu-board deploy-rknn-service-board install-rknn-health-timer-board collect-rknn-service-snapshot profile-rknn-service check-rknn-service-health run-rknn-camera-board evaluate-rknn-camera-events benchmark-matrix compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
 
 all: $(TARGET)
 
@@ -44,6 +44,9 @@ run-edgeav-runtime-sim: $(EDGEAV_RUNTIME_TARGET) out
 
 deploy-cpp-runtime-board:
 	bash scripts/deploy_cpp_runtime_to_rk3576.sh
+
+run-cpp-live-yuyv-board:
+	ssh rk3576 "cd /home/kickpi/spatial-edgeav/cpp_runtime_src && ./build/edgeav_runtime --device /dev/video73 --width 1280 --height 720 --fps 30 --frames 3 --format YUYV --report /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_live_yuyv_report.json --heartbeat /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_live_yuyv_heartbeat.json --rknn-model /home/kickpi/spatial-edgeav/models/yolov8n/yolov8n_rockchip_rk3576_i8.rknn --rknn-report /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_live_yuyv_rknn_report.json --rknn-runs 3 --rknn-warmup 1"
 
 run-sim: $(TARGET) out
 	$(TARGET) capture --frames 30 --output out/simulated.yuv --preview out/preview.ppm
