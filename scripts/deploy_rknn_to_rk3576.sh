@@ -8,7 +8,8 @@ REMOTE_ROOT="${REMOTE_ROOT:-/home/kickpi/spatial-edgeav}"
 REMOTE_MODEL_DIR="${REMOTE_ROOT}/models/yolov8n"
 REMOTE_BIN_DIR="${REMOTE_ROOT}/bin"
 REMOTE_RUN_DIR="${REMOTE_ROOT}/runs/rknn_smoke"
-REPORT_NAME="rk3576_rknn_report.json"
+MODEL_BASENAME="$(basename "${LOCAL_MODEL}")"
+REPORT_NAME="${MODEL_BASENAME%.rknn}_rk3576_report.json"
 SSH_RETRIES="${SSH_RETRIES:-3}"
 SSH_RETRY_DELAY_SEC="${SSH_RETRY_DELAY_SEC:-3}"
 
@@ -56,7 +57,7 @@ retry_command ssh -o BatchMode=yes -o ConnectTimeout=8 "${BOARD_HOST}" \
 echo "Copying RKNN model and board smoke-test helper..."
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   "${LOCAL_MODEL}" \
-  "${BOARD_HOST}:${REMOTE_MODEL_DIR}/$(basename "${LOCAL_MODEL}")"
+  "${BOARD_HOST}:${REMOTE_MODEL_DIR}/${MODEL_BASENAME}"
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   scripts/rk3576_rknn_smoke_test.py \
   "${BOARD_HOST}:${REMOTE_BIN_DIR}/"
@@ -75,7 +76,7 @@ fi
 echo "Running board-side RKNN smoke test..."
 retry_command ssh -o BatchMode=yes -o ConnectTimeout=8 "${BOARD_HOST}" \
   "python3 '${REMOTE_BIN_DIR}/rk3576_rknn_smoke_test.py' \
-    --model '${REMOTE_MODEL_DIR}/$(basename "${LOCAL_MODEL}")' \
+    --model '${REMOTE_MODEL_DIR}/${MODEL_BASENAME}' \
     ${REMOTE_IMAGE_ARG} \
     --report '${REMOTE_RUN_DIR}/${REPORT_NAME}' \
     --runs 30"

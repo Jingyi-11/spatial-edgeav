@@ -231,6 +231,20 @@ Convert ONNX to RKNN FP model for RK3576:
 make convert-rknn-fp
 ```
 
+Collect 100 RK3576 camera calibration frames and convert an INT8 RKNN model:
+
+```bash
+make collect-rknn-calib-board
+make convert-rknn-i8
+```
+
+If the Windows/WSL converter is offline, use the RK3576 ARM64 fallback:
+
+```bash
+make setup-rknn-converter-board
+make convert-rknn-i8-board
+```
+
 Install the RK3576 board runtime once. This opens an interactive SSH session
 because `apt` needs the board user's sudo password:
 
@@ -243,17 +257,19 @@ or NPU benchmark report:
 
 ```bash
 make deploy-rknn-board
+make deploy-rknn-board-i8
+make compare-rknn-benchmarks
 ```
 
-Verified RK3576 FP baseline:
+Verified RK3576 FP vs INT8 baseline:
 
 ```text
-Model: yolov8n_rk3576_fp.rknn
 Runtime: RKNN Toolkit Lite2 2.3.2, librknnrt 2.3.2, driver 0.9.7
 Input: RK3576 camera sample image, resized to 640x640 RGB
 Output tensor: [1, 84, 8400]
-Latency: mean 125.322 ms, median 127.799 ms, p95 147.408 ms over 30 runs
-FPS: 7.979
+FP:   13,396,342 bytes, mean 127.974 ms, 7.814 FPS
+INT8: 10,259,536 bytes, mean 62.217 ms, 16.073 FPS
+INT8 improvement: 2.057x speedup, 51.38% latency reduction, 23.42% smaller
 ```
 
 Verified outputs are generated locally under `runs/model_exports/yolov8n/`:
@@ -290,6 +306,9 @@ scripts/
   evaluate_spatial_rules.py
   mac_camera_baseline.py
   rk3576_setup_rknn_runtime.sh
+  rk3576_setup_rknn_converter.sh
+  rk3576_collect_calibration_frames.sh
+  rk3576_convert_yolov8_rknn.sh
   rk3576_camera_smoke_test.sh
   rk3576_camera_tune.sh
   rk3576_stream_baseline.sh
@@ -301,6 +320,7 @@ scripts/
   wsl_convert_yolov8_rknn.sh
   convert_yolov8_onnx_to_rknn.py
   collect_rknn_calibration_frames.sh
+  compare_rknn_benchmarks.py
   wsl_yolo_smoke_test.sh
   wsl_yolo_infer.py
   0*_rk3567_*.sh                 # board-side RK3567/RK3576 helpers

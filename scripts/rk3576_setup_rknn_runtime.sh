@@ -14,6 +14,7 @@ sudo apt-get install -y \
 
 echo "Installing RKNN-Toolkit-Lite2 ${RKNN_LITE_VERSION} for the current user..."
 python3 -m pip install --user --break-system-packages \
+  "numpy<=1.26.4" \
   "rknn-toolkit-lite2==${RKNN_LITE_VERSION}"
 
 echo "Verifying board runtime imports..."

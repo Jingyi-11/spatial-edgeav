@@ -99,13 +99,28 @@ Verified FP output on the current workstation:
 INT8 model after collecting calibration frames:
 
 ```bash
-bash scripts/collect_rknn_calibration_frames.sh
-scp -r runs/model_exports/yolov8n/calib winbox:C:/Users/HP/edgeav_data/exports/yolov8n/
-bash scripts/wsl_convert_yolov8_rknn.sh \
-  /mnt/c/Users/HP/edgeav_data/exports/yolov8n/yolov8n.onnx \
-  i8 \
-  rk3576
+make collect-rknn-calib-board
+make convert-rknn-i8
 ```
+
+`make collect-rknn-calib-board` captures 100 JPEG frames from the RK3576 C920
+camera and writes:
+
+```text
+runs/model_exports/yolov8n/calib/images/
+runs/model_exports/yolov8n/calib/dataset.txt
+```
+
+If Windows/WSL SSH is unavailable, run the ARM64 conversion fallback directly
+on the RK3576 board:
+
+```bash
+make setup-rknn-converter-board
+make convert-rknn-i8-board
+```
+
+The fallback uses `rknn-toolkit2==2.3.2`, `torch==2.2.0`,
+`onnx==1.16.1`, `numpy<=1.26.4`, and `scipy==1.12.0` on the RK3576 board.
 
 Expected outputs:
 
@@ -185,6 +200,50 @@ Verified board-side FP baseline:
 }
 ```
 
+Verified board-side INT8 baseline:
+
+```json
+{
+  "status": "ok",
+  "calibration_images": 100,
+  "conversion_elapsed_ms": 173422.891,
+  "model_size_bytes": 10259536,
+  "runs": 30,
+  "latency_ms": {
+    "mean": 62.217,
+    "median": 61.911,
+    "p95": 73.187,
+    "min": 54.222,
+    "max": 74.16
+  },
+  "fps": 16.073,
+  "output_shapes": [[1, 84, 8400]]
+}
+```
+
+FP vs INT8 comparison:
+
+```json
+{
+  "fp": {
+    "model_size_bytes": 13396342,
+    "latency_mean_ms": 127.974,
+    "fps": 7.814
+  },
+  "i8": {
+    "model_size_bytes": 10259536,
+    "latency_mean_ms": 62.217,
+    "fps": 16.073
+  },
+  "improvement": {
+    "latency_speedup": 2.057,
+    "latency_reduction_pct": 51.38,
+    "fps_gain_pct": 105.69,
+    "model_size_reduction_pct": 23.42
+  }
+}
+```
+
 The dynamic range warning printed by RKNN Runtime is expected for this static
 shape export:
 
@@ -226,11 +285,15 @@ the FP RKNN model runs successfully:
 
 ```text
 rknn-toolkit-lite2: 2.3.2
+rknn-toolkit2: 2.3.2
 librknnrt: 2.3.2
 rknn driver: 0.9.7
 numpy: 1.26.4
 cv2: 4.6.0
+torch: 2.2.0
+onnx: 1.16.1
 ```
 
-Next optimization step: convert an INT8 RKNN with camera calibration frames and
-compare latency, FPS, and output stability against the FP baseline.
+Next optimization step: add YOLO postprocessing on the board, compare decoded
+detections between FP and INT8 on the same frames, then move from single-image
+benchmarking to continuous camera inference.
