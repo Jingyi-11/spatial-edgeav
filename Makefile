@@ -9,7 +9,7 @@ LDFLAGS ?=
 SOURCES := src/main.c src/pipeline.c src/camera_capture.c src/yuv.c
 OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 
-.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board deploy-onnx-cpu-board run-rknn-camera-board evaluate-rknn-camera-events benchmark-matrix compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
+.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board deploy-onnx-cpu-board deploy-rknn-service-board run-rknn-camera-board evaluate-rknn-camera-events benchmark-matrix compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
 
 all: $(TARGET)
 
@@ -83,6 +83,9 @@ deploy-rockchip-yolov8n-i8-board:
 
 deploy-onnx-cpu-board:
 	bash scripts/deploy_onnx_cpu_to_rk3576.sh runs/model_exports/yolov8n/yolov8n.onnx
+
+deploy-rknn-service-board:
+	bash scripts/deploy_rknn_service_to_rk3576.sh runs/model_exports/rockchip_yolov8n/yolov8n_rockchip_rk3576_i8.rknn
 
 run-rknn-camera-board:
 	bash scripts/run_rknn_camera_loop_on_rk3576.sh runs/model_exports/rockchip_yolov8n/yolov8n_rockchip_rk3576_i8.rknn /dev/video73 60

@@ -285,6 +285,24 @@ Run continuous RK3576 camera capture plus RKNN inference:
 make run-rknn-camera-board
 ```
 
+Stage the long-running RK3576 RKNN camera service and run a 5-frame preflight:
+
+```bash
+make deploy-rknn-service-board
+```
+
+The deployment target copies the model, Python runtime helpers, systemd unit,
+and env defaults to the board. Installing and starting the system service needs
+board-side sudo:
+
+```bash
+ssh rk3576
+ENABLE_SERVICE=1 START_SERVICE=1 bash /home/kickpi/spatial-edgeav/bin/rk3576_install_rknn_service.sh
+sudo systemctl status spatial-edgeav-rknn.service
+sudo journalctl -u spatial-edgeav-rknn.service -f
+cat /home/kickpi/spatial-edgeav/runs/service/heartbeat.json
+```
+
 Build the generated CPU/NPU/remote benchmark matrix:
 
 ```bash
@@ -398,6 +416,7 @@ docs/
   mvp_plan.md                    # roadmap from baseline to industrial MVP
   pipeline_walkthrough.md        # RK3567/RK3576 camera pipeline notes
   rknn_deployment.md             # ONNX/RKNN conversion and benchmark plan
+  service_deployment.md          # RK3576 systemd service deployment
   windows_wsl_model_setup.md     # WSL model validation workflow
 include/
   camera_capture.h
@@ -415,7 +434,10 @@ scripts/
   rk3576_stream_baseline.sh
   run_remote_yolo_pipeline.sh
   deploy_rknn_to_rk3576.sh
+  deploy_rknn_service_to_rk3576.sh
   rk3576_rknn_smoke_test.py
+  rk3576_rknn_camera_loop.py
+  rk3576_install_rknn_service.sh
   wsl_setup_rknn_toolkit2.sh
   wsl_export_yolov8_onnx.sh
   wsl_convert_yolov8_rknn.sh
@@ -452,3 +474,6 @@ src/
 - [Pipeline Walkthrough](docs/pipeline_walkthrough.md)
 - [MacBook Remote Setup](docs/macbook_remote_setup.md)
 - [Windows / WSL Model Setup](docs/windows_wsl_model_setup.md)
+- [RKNN Deployment](docs/rknn_deployment.md)
+- [Benchmark Matrix](docs/benchmark_matrix.md)
+- [RK3576 Service Deployment](docs/service_deployment.md)

@@ -1,0 +1,37 @@
+[Unit]
+Description=Spatial EdgeAV RK3576 RKNN camera service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kickpi
+Group=kickpi
+SupplementaryGroups=video render
+WorkingDirectory=/home/kickpi/spatial-edgeav/bin
+EnvironmentFile=/etc/spatial-edgeav/rknn.env
+ExecStart=/usr/bin/python3 /home/kickpi/spatial-edgeav/bin/rk3576_rknn_camera_loop.py \
+  --model ${EDGEAV_MODEL} \
+  --device ${EDGEAV_CAMERA} \
+  --width ${EDGEAV_WIDTH} \
+  --height ${EDGEAV_HEIGHT} \
+  --fps ${EDGEAV_FPS} \
+  --image-size ${EDGEAV_IMAGE_SIZE} \
+  --conf-thres ${EDGEAV_CONF_THRES} \
+  --iou-thres ${EDGEAV_IOU_THRES} \
+  --frames 0 \
+  --report ${EDGEAV_ROOT}/runs/service/rknn_camera_report.json \
+  --frames-json ${EDGEAV_ROOT}/runs/service/rknn_camera_frames.json \
+  --annotated ${EDGEAV_ROOT}/runs/service/rknn_camera_last.jpg \
+  --heartbeat-json ${EDGEAV_ROOT}/runs/service/heartbeat.json \
+  --status-interval-sec ${EDGEAV_STATUS_INTERVAL_SEC} \
+  --max-frame-records ${EDGEAV_MAX_FRAME_RECORDS}
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

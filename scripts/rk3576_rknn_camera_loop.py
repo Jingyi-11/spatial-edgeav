@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import glob
 import importlib
 import json
 import platform
+import signal
 import statistics
 import sys
 import time
@@ -24,6 +26,14 @@ from rk3576_rknn_smoke_test import (
     nms,
     percentile,
 )
+
+SHOULD_STOP = False
+
+
+def request_stop(signum: int, _frame: Any) -> None:
+    global SHOULD_STOP
+    SHOULD_STOP = True
+    print(f"Received signal {signum}; stopping after current frame.", flush=True)
 
 
 def annotate(image_bgr: Any, detections: list[dict[str, Any]]) -> Any:
@@ -212,14 +222,24 @@ def finish(report: dict[str, Any], report_path: Path, status: str, exit_code: in
     return exit_code
 
 
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
 def main() -> int:
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--device", default="/dev/video73")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--frames", type=int, default=60)
+    parser.add_argument("--frames", type=int, default=60, help="Number of frames to process after warmup; 0 means run forever.")
     parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--conf-thres", type=float, default=0.25)
@@ -228,6 +248,9 @@ def main() -> int:
     parser.add_argument("--report", type=Path, default=Path("rk3576_rknn_camera_report.json"))
     parser.add_argument("--frames-json", type=Path, default=None)
     parser.add_argument("--annotated", type=Path, default=None)
+    parser.add_argument("--heartbeat-json", type=Path, default=None)
+    parser.add_argument("--status-interval-sec", type=float, default=10.0)
+    parser.add_argument("--max-frame-records", type=int, default=300)
     args = parser.parse_args()
 
     report: dict[str, Any] = {
@@ -292,7 +315,7 @@ def main() -> int:
         rknn.release()
         return finish(report, args.report, "open_camera_failed", 8)
 
-    frames: list[dict[str, Any]] = []
+    frames: deque[dict[str, Any]] = deque(maxlen=max(1, args.max_frame_records))
     capture_ms: list[float] = []
     preprocess_ms: list[float] = []
     inference_ms: list[float] = []
@@ -302,17 +325,22 @@ def main() -> int:
     postprocess_type = None
     last_annotated = None
     started = time.perf_counter()
+    last_status = 0.0
 
     processed = 0
-    for frame_idx in range(args.frames + args.warmup):
+    frame_idx = 0
+    while not SHOULD_STOP and (args.frames == 0 or processed < args.frames):
         frame_start = time.perf_counter()
         t0 = time.perf_counter()
         ok, frame_bgr = cap.read()
         t1 = time.perf_counter()
         if not ok or frame_bgr is None:
             if frame_idx < args.warmup:
+                frame_idx += 1
                 continue
             frames.append({"index": frame_idx - args.warmup, "error": "capture_failed"})
+            processed += 1
+            frame_idx += 1
             continue
 
         t2 = time.perf_counter()
@@ -325,6 +353,7 @@ def main() -> int:
         t4 = time.perf_counter()
 
         if frame_idx < args.warmup:
+            frame_idx += 1
             continue
 
         try:
@@ -368,6 +397,28 @@ def main() -> int:
             }
         )
         processed += 1
+        frame_idx += 1
+
+        now = time.perf_counter()
+        if args.heartbeat_json is not None and now - last_status >= args.status_interval_sec:
+            last_status = now
+            end_to_end_mean = statistics.mean(end_to_end_ms) if end_to_end_ms else None
+            inference_mean = statistics.mean(inference_ms) if inference_ms else None
+            write_json_atomic(
+                args.heartbeat_json,
+                {
+                    "status": "running",
+                    "model": str(args.model),
+                    "camera": report["camera"],
+                    "frames_processed": processed,
+                    "uptime_sec": round(now - started, 3),
+                    "fps": {
+                        "inference_only": round(1000.0 / inference_mean, 3) if inference_mean else None,
+                        "end_to_end": round(1000.0 / end_to_end_mean, 3) if end_to_end_mean else None,
+                    },
+                    "last_frame": frames[-1] if frames else None,
+                },
+            )
 
     cap.release()
     rknn.release()
@@ -375,7 +426,7 @@ def main() -> int:
 
     if args.frames_json is not None:
         args.frames_json.parent.mkdir(parents=True, exist_ok=True)
-        args.frames_json.write_text(json.dumps({"frames": frames}, indent=2), encoding="utf-8")
+        args.frames_json.write_text(json.dumps({"frames": list(frames)}, indent=2), encoding="utf-8")
 
     if args.annotated is not None and last_annotated is not None:
         args.annotated.parent.mkdir(parents=True, exist_ok=True)
@@ -383,13 +434,31 @@ def main() -> int:
 
     end_to_end_mean = statistics.mean(end_to_end_ms) if end_to_end_ms else None
     inference_mean = statistics.mean(inference_ms) if inference_ms else None
+    final_status = "stopped" if SHOULD_STOP and args.frames == 0 else "ok"
+    if args.heartbeat_json is not None:
+        write_json_atomic(
+            args.heartbeat_json,
+            {
+                "status": final_status,
+                "model": str(args.model),
+                "camera": report["camera"],
+                "frames_processed": processed,
+                "uptime_sec": round(time.perf_counter() - started, 3),
+                "fps": {
+                    "inference_only": round(1000.0 / inference_mean, 3) if inference_mean else None,
+                    "end_to_end": round(1000.0 / end_to_end_mean, 3) if end_to_end_mean else None,
+                },
+                "last_frame": frames[-1] if frames else None,
+            },
+        )
     return finish(
         report,
         args.report,
-        "ok",
+        final_status,
         frames_requested=args.frames,
         frames_processed=processed,
         warmup=args.warmup,
+        retained_frame_records=len(frames),
         postprocess={
             "type": postprocess_type,
             "candidate_filter": "class_score_and_score_sum",

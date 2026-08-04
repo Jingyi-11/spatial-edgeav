@@ -689,6 +689,52 @@ CPU and memory usage over longer 300-frame runs
 
 See [Benchmark Matrix](benchmark_matrix.md) for the generated table.
 
+## Phase 4A: RKNN Camera Service Skeleton
+
+The Python RKNN camera loop can now run as a long-lived service command. In
+benchmark mode, `--frames 60` processes a fixed number of frames. In service
+mode, `--frames 0` runs until it receives `SIGTERM` or `SIGINT`, writes a final
+report, keeps only the most recent frame records in memory, and updates a
+heartbeat JSON file periodically.
+
+Service-mode additions:
+
+```text
+--frames 0
+--heartbeat-json /home/kickpi/spatial-edgeav/runs/service/heartbeat.json
+--status-interval-sec 10
+--max-frame-records 300
+```
+
+Repository service files:
+
+```text
+systemd/spatial-edgeav-rknn.service
+configs/spatial-edgeav-rknn.env
+scripts/deploy_rknn_service_to_rk3576.sh
+scripts/rk3576_install_rknn_service.sh
+```
+
+Stage the service on the board and run a short command preflight:
+
+```bash
+make deploy-rknn-service-board
+```
+
+Then install and start the systemd service from an SSH shell on the board:
+
+```bash
+ENABLE_SERVICE=1 START_SERVICE=1 bash /home/kickpi/spatial-edgeav/bin/rk3576_install_rknn_service.sh
+sudo systemctl status spatial-edgeav-rknn.service
+sudo journalctl -u spatial-edgeav-rknn.service -f
+cat /home/kickpi/spatial-edgeav/runs/service/heartbeat.json
+```
+
+This is the first Phase 4 service boundary. It is still Python, but it now has
+the operational shape expected from an embedded Linux service: restart policy,
+external configuration, journald logs, heartbeat status, graceful shutdown, and
+bounded memory use for retained frame records.
+
 ## Current Board Finding
 
 The board is reachable over SSH as `rk3576`, runs Ubuntu 24.04 on aarch64, and
@@ -707,5 +753,5 @@ torch: 2.2.0
 onnx: 1.16.1
 ```
 
-Next optimization step: add long-run CPU/memory profiling and then move the
-validated Python pipeline into a long-running service.
+Next optimization step: install the systemd service on the board, collect
+long-run CPU/memory profiling, and then migrate the hot runtime path to C/C++.
