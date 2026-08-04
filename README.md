@@ -262,6 +262,12 @@ make compare-rknn-benchmarks
 make compare-rknn-detections
 ```
 
+Run the board-local ONNX Runtime CPU fallback benchmark:
+
+```bash
+make deploy-onnx-cpu-board
+```
+
 Rockchip's YOLOv8 model zoo provides an RKNN-friendly ONNX graph whose
 detection head is split into box distribution, class score, and score-sum
 branches. Use it for the accepted INT8 deployment profile:
@@ -355,10 +361,14 @@ Current generated benchmark highlights:
 RK3576 NPU FP single image: 125.658 ms, 7.958 FPS, quality accepted
 RK3576 NPU INT8 raw head: 62.750 ms, 15.936 FPS, quality rejected
 RK3576 NPU INT8 optimized head: 62.265 ms, 16.060 FPS, quality accepted
+RK3576 CPU ONNX Runtime: 379.994 ms, 2.632 FPS, quality accepted fallback
 RK3576 NPU continuous camera INT8: 66.370 ms end-to-end, 15.067 FPS
 WSL CPU YOLO core inference: 71.515 ms, 13.983 FPS
 Remote Mac/RK3576/WSL pipeline: 16196 ms end-to-end connectivity baseline
 ```
+
+On the same RK3576 single-image benchmark, the optimized INT8 RKNN NPU path is
+about 6.1x faster than ONNX Runtime CPU.
 
 See [docs/benchmark_matrix.md](docs/benchmark_matrix.md) for the full matrix.
 

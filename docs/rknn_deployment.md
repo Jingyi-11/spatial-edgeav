@@ -663,16 +663,26 @@ Current measured paths:
 RK3576 NPU FP single-image RKNN
 RK3576 NPU raw INT8 RKNN failure case
 RK3576 NPU Rockchip optimized INT8 RKNN
+RK3576 CPU ONNX Runtime fallback
 RK3576 continuous camera + INT8 RKNN
 WSL CPU YOLO core inference
 Mac -> RK3576 -> WSL remote end-to-end pipeline
 ```
 
-The matrix keeps unmeasured CPU coverage explicit instead of hiding it. The
-remaining Phase 3 benchmark work is:
+Verified RK3576 CPU fallback result:
 
 ```text
-RK3576 CPU ONNX Runtime fallback
+Runtime: ONNX Runtime 1.26.0, CPUExecutionProvider, 4 intra-op threads
+Input: same RK3576 camera sample image, resized to 640x640 NCHW float32
+Latency: mean 379.994 ms, 2.632 FPS
+Detections: person, surfboard, bottle, surfboard
+NPU speedup: optimized INT8 RKNN is about 6.1x faster on the same board
+```
+
+The matrix keeps unmeasured coverage explicit instead of hiding it. The
+remaining optional benchmark work is:
+
+```text
 optional MacBook M1 host-side reference
 CPU and memory usage over longer 300-frame runs
 ```
@@ -697,5 +707,5 @@ torch: 2.2.0
 onnx: 1.16.1
 ```
 
-Next optimization step: add the RK3576 CPU fallback benchmark and then move the
+Next optimization step: add long-run CPU/memory profiling and then move the
 validated Python pipeline into a long-running service.

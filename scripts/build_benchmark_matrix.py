@@ -71,6 +71,7 @@ def build_matrix(root: Path) -> dict[str, Any]:
     fp = load_json(root / "runs/rk3576_board/yolov8n_rk3576_fp_rk3576_report.json")
     raw_i8 = load_json(root / "runs/rk3576_board/yolov8n_rk3576_i8_rk3576_report.json")
     rockchip_i8 = load_json(root / "runs/rk3576_board/yolov8n_rockchip_rk3576_i8_rk3576_report.json")
+    onnx_cpu = load_json(root / "runs/rk3576_board/yolov8n_rk3576_cpu_report.json")
     camera = load_json(root / "runs/rk3576_camera_rknn/yolov8n_rockchip_rk3576_i8_camera_report.json")
 
     remote_dir = latest_remote_run(root / "runs/edgeav_remote_yolo")
@@ -142,6 +143,17 @@ def build_matrix(root: Path) -> dict[str, Any]:
         report=rockchip_i8,
         quality="accepted deployable baseline",
         notes="Uses 9-output box/class/score-sum head; preserves meaningful detections.",
+    )
+    add_report_row(
+        name="RK3576 CPU single image ONNX",
+        engine="ONNX Runtime CPUExecutionProvider",
+        device="RK3576 ARM CPU",
+        model="Ultralytics YOLOv8n ONNX",
+        precision="FP32 CPU",
+        workload="single image, 30 timed runs",
+        report=onnx_cpu if onnx_cpu and onnx_cpu.get("status") == "ok" else None,
+        quality="CPU fallback baseline" if onnx_cpu and onnx_cpu.get("status") == "ok" else "pending",
+        notes="Board-local CPU fallback for comparing NPU acceleration against plain ARM CPU.",
     )
 
     if camera:
@@ -231,21 +243,6 @@ def build_matrix(root: Path) -> dict[str, Any]:
     rows.extend(
         [
             {
-                "name": "RK3576 CPU ONNX Runtime",
-                "status": "pending",
-                "engine": "ONNX Runtime CPU",
-                "device": "RK3576 ARM CPU",
-                "model": "YOLOv8n ONNX",
-                "precision": "FP32 or INT8 CPU EP",
-                "workload": "single image and camera loop",
-                "model_size_mb": None,
-                "latency_mean_ms": None,
-                "fps": None,
-                "detections": None,
-                "quality": "pending",
-                "notes": "Useful as a board-local CPU fallback; package/runtime not benchmarked yet.",
-            },
-            {
                 "name": "MacBook M1 CPU/ANE reference",
                 "status": "pending",
                 "engine": "PyTorch, ONNX Runtime, or Core ML",
@@ -272,6 +269,12 @@ def build_matrix(root: Path) -> dict[str, Any]:
 
 def render_markdown(matrix: dict[str, Any]) -> str:
     rows = matrix["matrix"]
+    row_by_name = {row["name"]: row for row in rows}
+    cpu_row = row_by_name.get("RK3576 CPU single image ONNX", {})
+    npu_i8_row = row_by_name.get("RK3576 NPU single image INT8 optimized head", {})
+    npu_speedup = None
+    if cpu_row.get("latency_mean_ms") and npu_i8_row.get("latency_mean_ms"):
+        npu_speedup = round(float(cpu_row["latency_mean_ms"]) / float(npu_i8_row["latency_mean_ms"]), 3)
     lines = [
         "# Benchmark Matrix",
         "",
@@ -325,7 +328,15 @@ def render_markdown(matrix: dict[str, Any]) -> str:
             "- The RK3576 NPU INT8 optimized-head path is the current deployable edge baseline.",
             "- The raw Ultralytics INT8 RKNN is kept as a documented failed optimization because its class-score branch collapses to zero.",
             "- The WSL CPU number is useful for model validation, while the remote pipeline number measures SSH/SCP orchestration overhead.",
-            "- Phase 3 CPU coverage is not fully complete until RK3576 CPU ONNX Runtime and optional MacBook reference benchmarks are added.",
+        ]
+    )
+    if npu_speedup is not None:
+        lines.append(
+            f"- On the RK3576 board, optimized INT8 RKNN NPU inference is {npu_speedup}x faster than ONNX Runtime CPU on the same single-image benchmark."
+        )
+    lines.extend(
+        [
+            "- Phase 3 now includes a board-local CPU fallback measurement; optional remaining coverage is MacBook M1 host reference and longer CPU/memory profiling.",
             "",
         ]
     )
