@@ -258,12 +258,13 @@ custom YOLO training on WSL
   -> optimized C++ service with systemd
 ```
 
-Next performance step:
+Postprocess optimization status:
 
 ```text
 Python YOLO postprocess
-  -> score-sum filtering / vectorized DFL+NMS
-  -> C++ RKNN runtime service
+  -> class-score + score-sum candidate filtering before DFL
+  -> postprocess latency reduced from 33.843 ms to 4.153 ms
+  -> next: duplicate-box cleanup and C++ RKNN runtime service
   -> JSONL event log
   -> spatial rule evaluation
 ```

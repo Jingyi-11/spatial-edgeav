@@ -446,6 +446,65 @@ move DFL/NMS into C++ or optimized NumPy
 switch resize/preprocess to RGA or zero-copy buffers
 ```
 
+## Phase 3E: Candidate-Filtered YOLO Postprocess
+
+The first postprocess optimization keeps the Rockchip 9-output YOLOv8 format
+but avoids running DFL on every feature-map position. The decoder now:
+
+```text
+flatten class-score tensors
+  -> keep positions whose max class score passes the confidence threshold
+  -> also require score-sum to pass the same threshold when available
+  -> run DFL only for those selected positions
+  -> run class-wise NMS on the much smaller candidate set
+```
+
+This keeps the decode logic in Python for now, but changes the asymptotic cost
+of the expensive DFL step from all `80x80 + 40x40 + 20x20 = 8400` positions to
+only the positions that can actually survive thresholding.
+
+Verified 60-frame RK3576 camera run after candidate filtering:
+
+```json
+{
+  "status": "ok",
+  "postprocess": {
+    "type": "rockchip_yolov8_optimized_head",
+    "candidate_filter": "class_score_and_score_sum",
+    "confidence_threshold": 0.25
+  },
+  "latency_ms": {
+    "capture_mean": 19.204,
+    "preprocess_mean": 5.07,
+    "inference_mean": 41.586,
+    "postprocess_mean": 4.153,
+    "end_to_end_mean": 70.016
+  },
+  "fps": {
+    "inference_only": 24.046,
+    "end_to_end": 14.282
+  },
+  "detections_by_class": {
+    "chair": 162,
+    "surfboard": 64,
+    "bottle": 97
+  }
+}
+```
+
+Measured improvement against the previous Python full-map DFL baseline:
+
+```text
+postprocess latency: 33.843 ms -> 4.153 ms
+postprocess reduction: 87.7%
+end-to-end latency: 92.605 ms -> 70.016 ms
+end-to-end FPS: 10.798 -> 14.282
+```
+
+The next step is to reduce duplicate boxes and move the remaining hot path into
+C++: candidate filtering, selected DFL, NMS, and JSON event emission should be
+implemented inside the RKNN runtime service rather than in Python.
+
 The dynamic range warning printed by RKNN Runtime is expected for this static
 shape export:
 

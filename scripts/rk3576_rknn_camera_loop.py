@@ -16,8 +16,7 @@ from typing import Any
 
 from rk3576_rknn_smoke_test import (
     COCO80,
-    box_iou,
-    box_process,
+    box_process_selected,
     flatten_hw_channels,
     group_rockchip_yolov8_outputs,
     module_status,
@@ -114,14 +113,27 @@ def decode_rockchip_yolov8(
     height, width = image_bgr.shape[:2]
     box_arrays = []
     score_arrays = []
-    for box_tensor, score_tensor, _score_sum in groups:
-        box_arrays.append(flatten_hw_channels(box_process(box_tensor, image_size)))
-        score_arrays.append(flatten_hw_channels(score_tensor))
+    for box_tensor, score_tensor, score_sum in groups:
+        scores = flatten_hw_channels(score_tensor)
+        class_confidences = np.max(scores, axis=1)
+        candidate_mask = class_confidences.reshape(score_tensor.shape[2], score_tensor.shape[3]) >= conf_threshold
+        if score_sum is not None:
+            sum_scores = flatten_hw_channels(score_sum)[:, 0]
+            candidate_mask &= sum_scores.reshape(score_sum.shape[2], score_sum.shape[3]) >= conf_threshold
+        boxes = box_process_selected(box_tensor, candidate_mask, image_size)
+        if boxes.size == 0:
+            continue
+        box_arrays.append(boxes)
+        score_arrays.append(scores[candidate_mask.reshape(-1)])
 
-    boxes = np.concatenate(box_arrays, axis=0)
-    scores = np.concatenate(score_arrays, axis=0)
-    class_ids = np.argmax(scores, axis=1)
-    confidences = scores[np.arange(scores.shape[0]), class_ids]
+    boxes = np.concatenate(box_arrays, axis=0) if box_arrays else np.empty((0, 4), dtype=np.float32)
+    scores = np.concatenate(score_arrays, axis=0) if score_arrays else np.empty((0, 80), dtype=np.float32)
+    if boxes.size == 0 or scores.size == 0:
+        class_ids = np.empty((0,), dtype=np.int64)
+        confidences = np.empty((0,), dtype=np.float32)
+    else:
+        class_ids = np.argmax(scores, axis=1)
+        confidences = scores[np.arange(scores.shape[0]), class_ids]
 
     scale_x = width / float(image_size)
     scale_y = height / float(image_size)
@@ -379,6 +391,7 @@ def main() -> int:
         warmup=args.warmup,
         postprocess={
             "type": postprocess_type,
+            "candidate_filter": "class_score_and_score_sum",
             "confidence_threshold": args.conf_thres,
             "iou_threshold": args.iou_thres,
             "max_detections": args.max_detections,
