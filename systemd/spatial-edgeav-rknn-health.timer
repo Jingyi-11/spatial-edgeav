@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Spatial EdgeAV RK3576 local health check periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=spatial-edgeav-rknn-health.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

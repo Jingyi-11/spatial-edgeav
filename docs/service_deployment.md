@@ -231,6 +231,78 @@ future systemd timer: it translates raw service state into an explicit
 `ok/warn/critical` decision that CI, cron, dashboards, or deployment scripts can
 consume.
 
+## Board-Local Health Timer
+
+The Mac-side health check is useful for remote acceptance. The board-local
+timer lets the RK3576 check itself periodically without depending on a laptop
+being online.
+
+Repository files:
+
+```text
+scripts/rk3576_service_health_local.py
+systemd/spatial-edgeav-rknn-health.service
+systemd/spatial-edgeav-rknn-health.timer
+```
+
+After staging the service files with `make deploy-rknn-service-board`, install
+and start the timer from the Mac:
+
+```bash
+make install-rknn-health-timer-board
+```
+
+Equivalent board-side command:
+
+```bash
+INSTALL_HEALTH_TIMER=1 ENABLE_HEALTH_TIMER=1 START_HEALTH_TIMER=1 bash /home/kickpi/spatial-edgeav/bin/rk3576_install_rknn_service.sh
+```
+
+The timer runs one-shot health checks after boot and then once per minute:
+
+```text
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+```
+
+It writes board-local artifacts:
+
+```text
+/home/kickpi/spatial-edgeav/runs/service_health/health.json
+/home/kickpi/spatial-edgeav/runs/service_health/health.md
+```
+
+Useful inspection commands:
+
+```bash
+sudo systemctl status spatial-edgeav-rknn-health.timer
+sudo systemctl list-timers spatial-edgeav-rknn-health.timer
+sudo journalctl -u spatial-edgeav-rknn-health.service -n 50
+cat /home/kickpi/spatial-edgeav/runs/service_health/health.json
+```
+
+Verified board-local checker before installing the timer:
+
+```text
+Overall: ok
+Checked at: 2026-08-04T21:51:02+00:00
+Heartbeat age: 0.635 sec
+End-to-end FPS: 14.236
+Restart count: 0
+RSS: 364224 KB
+Max temperature: 46.230 C
+Last-frame error: None
+```
+
+Installing the timer writes unit files into `/etc/systemd/system`, so it
+requires an interactive `sudo` password on the board. The Makefile target uses
+`ssh -t` for that reason.
+
+The local timer intentionally writes the latest health result in place. That
+keeps disk usage bounded on a small embedded root filesystem while still giving
+CI, SSH checks, or a future dashboard a stable file to read.
+
 Restart or stop:
 
 ```bash
@@ -250,8 +322,9 @@ journald logs
 heartbeat JSON status
 graceful SIGTERM shutdown
 bounded retained frame records
+board-local timer health checks
 ```
 
-The remaining Phase 4 work is to add long-run resource profiling, service
-health checks, log rotation policy, and eventually migrate the hot capture /
-preprocess / RKNN / postprocess path from Python into C/C++.
+The remaining Phase 4 work is to add a stricter log retention policy and
+eventually migrate the hot capture / preprocess / RKNN / postprocess path from
+Python into C/C++.

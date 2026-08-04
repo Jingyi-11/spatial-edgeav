@@ -44,9 +44,12 @@ retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   scripts/rk3576_rknn_smoke_test.py \
   scripts/rk3576_rknn_camera_loop.py \
+  scripts/rk3576_service_health_local.py \
   "${BOARD_HOST}:${REMOTE_BIN_DIR}/"
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   systemd/spatial-edgeav-rknn.service \
+  systemd/spatial-edgeav-rknn-health.service \
+  systemd/spatial-edgeav-rknn-health.timer \
   "${BOARD_HOST}:${REMOTE_SERVICE_DIR}/"
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   configs/spatial-edgeav-rknn.env \
@@ -73,8 +76,10 @@ echo "Service files are staged on ${BOARD_HOST}."
 echo "To install the systemd service on the board, run:"
 echo "  ssh ${BOARD_HOST}"
 echo "  ENABLE_SERVICE=1 START_SERVICE=1 bash ${REMOTE_BIN_DIR}/rk3576_install_rknn_service.sh"
+echo "  INSTALL_HEALTH_TIMER=1 ENABLE_HEALTH_TIMER=1 START_HEALTH_TIMER=1 bash ${REMOTE_BIN_DIR}/rk3576_install_rknn_service.sh"
 echo
 echo "Then inspect:"
 echo "  sudo systemctl status spatial-edgeav-rknn.service"
+echo "  sudo systemctl status spatial-edgeav-rknn-health.timer"
 echo "  sudo journalctl -u spatial-edgeav-rknn.service -f"
 echo "  cat ${REMOTE_RUN_DIR}/heartbeat.json"

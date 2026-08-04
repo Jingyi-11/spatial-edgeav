@@ -303,6 +303,14 @@ sudo journalctl -u spatial-edgeav-rknn.service -f
 cat /home/kickpi/spatial-edgeav/runs/service/heartbeat.json
 ```
 
+Install the board-local health-check timer:
+
+```bash
+make install-rknn-health-timer-board
+ssh rk3576 "sudo systemctl status spatial-edgeav-rknn-health.timer"
+ssh rk3576 "cat /home/kickpi/spatial-edgeav/runs/service_health/health.json"
+```
+
 Collect a local service-health snapshot from the running board service:
 
 ```bash
@@ -456,6 +464,7 @@ scripts/
   collect_rknn_service_snapshot.sh
   profile_rknn_service.py
   check_rknn_service_health.py
+  rk3576_service_health_local.py
   rk3576_rknn_smoke_test.py
   rk3576_rknn_camera_loop.py
   rk3576_install_rknn_service.sh
