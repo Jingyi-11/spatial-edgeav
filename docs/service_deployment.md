@@ -184,6 +184,53 @@ signals are stable systemd state, zero restart increase, frame count increasing,
 no last-frame errors, bounded memory growth, and temperatures far below thermal
 throttling territory.
 
+## Health Check
+
+Run a threshold-based health check against the live service:
+
+```bash
+make check-rknn-service-health
+```
+
+The check writes local, git-ignored artifacts under:
+
+```text
+runs/rk3576_service_health/<timestamp>/
+  health.json
+  health.md
+```
+
+Default thresholds:
+
+```text
+systemd state: active/running
+MainPID: nonzero
+heartbeat age: <= 30 sec
+restart count: <= 0
+end-to-end FPS: >= 10
+RSS: <= 600000 KB
+max thermal-zone temperature: <= 75 C
+last-frame error: None
+```
+
+Verified health check:
+
+```text
+Overall: ok
+Checked at: 2026-08-04T21:29:58+00:00
+Heartbeat age: 0.774 sec
+End-to-end FPS: 14.307
+Restart count: 0
+RSS: 376812 KB
+Max temperature: 46.230 C
+Last-frame error: None
+```
+
+The health-check script is intended to become the boundary for alerting or a
+future systemd timer: it translates raw service state into an explicit
+`ok/warn/critical` decision that CI, cron, dashboards, or deployment scripts can
+consume.
+
 Restart or stop:
 
 ```bash

@@ -315,6 +315,12 @@ Run a trend-style service profiler:
 make profile-rknn-service
 ```
 
+Run a threshold-based live health check:
+
+```bash
+make check-rknn-service-health
+```
+
 Build the generated CPU/NPU/remote benchmark matrix:
 
 ```bash
@@ -449,6 +455,7 @@ scripts/
   deploy_rknn_service_to_rk3576.sh
   collect_rknn_service_snapshot.sh
   profile_rknn_service.py
+  check_rknn_service_health.py
   rk3576_rknn_smoke_test.py
   rk3576_rknn_camera_loop.py
   rk3576_install_rknn_service.sh
