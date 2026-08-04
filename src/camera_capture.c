@@ -52,8 +52,7 @@ static int xioctl(int fd, unsigned long request, void *argument)
     } while (result == -1 && errno == EINTR);
     return result;
 }
-#endif
-
+#else
 static size_t simulated_frame_size(const PipelineConfig *config)
 {
     if (config->pixel_format == PIXEL_FORMAT_NV12) {
@@ -76,6 +75,7 @@ static void fill_simulated_yuyv(uint8_t *data, const PipelineConfig *config, uin
         }
     }
 }
+#endif
 
 int camera_open(CameraCapture **camera, const PipelineConfig *config)
 {
