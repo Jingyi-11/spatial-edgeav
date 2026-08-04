@@ -279,6 +279,12 @@ Run continuous RK3576 camera capture plus RKNN inference:
 make run-rknn-camera-board
 ```
 
+Build the generated CPU/NPU/remote benchmark matrix:
+
+```bash
+make benchmark-matrix
+```
+
 Verified RK3576 FP vs INT8 baseline:
 
 ```text
@@ -343,6 +349,19 @@ rules triggered: chair_in_left_work_area 70, bottle_in_left_work_area 1
 artifacts: observations.jsonl, events.jsonl, event_summary.json
 ```
 
+Current generated benchmark highlights:
+
+```text
+RK3576 NPU FP single image: 125.658 ms, 7.958 FPS, quality accepted
+RK3576 NPU INT8 raw head: 62.750 ms, 15.936 FPS, quality rejected
+RK3576 NPU INT8 optimized head: 62.265 ms, 16.060 FPS, quality accepted
+RK3576 NPU continuous camera INT8: 66.370 ms end-to-end, 15.067 FPS
+WSL CPU YOLO core inference: 71.515 ms, 13.983 FPS
+Remote Mac/RK3576/WSL pipeline: 16196 ms end-to-end connectivity baseline
+```
+
+See [docs/benchmark_matrix.md](docs/benchmark_matrix.md) for the full matrix.
+
 Verified outputs are generated locally under `runs/model_exports/yolov8n/`:
 
 ```text
@@ -364,6 +383,7 @@ configs/
   spatial_rules.json             # zones and spatial rule config
 docs/
   current_pipeline.md            # verified end-to-end pipeline
+  benchmark_matrix.md            # generated CPU/NPU/remote benchmark matrix
   macbook_remote_setup.md        # SSH/Tailscale remote development setup
   mvp_plan.md                    # roadmap from baseline to industrial MVP
   pipeline_walkthrough.md        # RK3567/RK3576 camera pipeline notes

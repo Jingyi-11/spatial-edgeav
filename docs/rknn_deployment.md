@@ -641,17 +641,43 @@ RK3576 camera frame
   -> spatial event rules
 ```
 
-Initial benchmark metrics:
+## Phase 3H: Benchmark Matrix
+
+Phase 3 now has a generated benchmark matrix that separates model-compute
+latency from distributed pipeline latency:
+
+```bash
+make benchmark-matrix
+```
+
+The command reads local JSON reports and writes:
 
 ```text
-model type: FP / INT8
-model size
-single-image inference latency
-camera capture latency
-end-to-end latency
-FPS over 30-300 frames
-CPU and memory usage
+runs/benchmarks/benchmark_matrix.json
+docs/benchmark_matrix.md
 ```
+
+Current measured paths:
+
+```text
+RK3576 NPU FP single-image RKNN
+RK3576 NPU raw INT8 RKNN failure case
+RK3576 NPU Rockchip optimized INT8 RKNN
+RK3576 continuous camera + INT8 RKNN
+WSL CPU YOLO core inference
+Mac -> RK3576 -> WSL remote end-to-end pipeline
+```
+
+The matrix keeps unmeasured CPU coverage explicit instead of hiding it. The
+remaining Phase 3 benchmark work is:
+
+```text
+RK3576 CPU ONNX Runtime fallback
+optional MacBook M1 host-side reference
+CPU and memory usage over longer 300-frame runs
+```
+
+See [Benchmark Matrix](benchmark_matrix.md) for the generated table.
 
 ## Current Board Finding
 
@@ -671,6 +697,5 @@ torch: 2.2.0
 onnx: 1.16.1
 ```
 
-Next optimization step: fix INT8 output quality by adjusting RKNN conversion
-settings, then move from single-image benchmarking to continuous camera
-inference.
+Next optimization step: add the RK3576 CPU fallback benchmark and then move the
+validated Python pipeline into a long-running service.
