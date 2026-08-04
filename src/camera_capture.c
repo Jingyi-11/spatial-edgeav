@@ -1,9 +1,12 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "camera_capture.h"
 
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifdef __linux__

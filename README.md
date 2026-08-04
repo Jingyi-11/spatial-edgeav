@@ -173,6 +173,34 @@ Capture NV12:
   --output out/rk3567_capture_nv12.yuv
 ```
 
+## Quick Start: C/C++ Runtime Scaffold
+
+Phase 5 starts the migration from the Python RKNN camera loop to a board-side
+C/C++ runtime. The first scaffold builds `build/edgeav_runtime`, writes
+heartbeat/report JSON, and can run without touching the camera by using
+synthetic frames:
+
+```bash
+make edgeav-runtime
+make run-edgeav-runtime-sim
+cat out/edgeav_runtime_report.json
+```
+
+Deploy and smoke-test the C/C++ runtime shell on RK3576:
+
+```bash
+make deploy-cpp-runtime-board
+```
+
+Verified RK3576 simulated runtime smoke test:
+
+```text
+status: ok, frames: 30, measured FPS: 29.457
+report: runs/rk3576_cpp_runtime/edgeav_runtime_sim_report.json
+```
+
+Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
+
 ## RK3567/RK3576 Media Scripts
 
 Prepare tools on the board:
