@@ -136,6 +136,54 @@ This confirms that the service is not only installable but actually running
 under systemd, updating heartbeat state, and maintaining expected RKNN
 camera-loop throughput over a multi-minute window.
 
+## Long-Run Profiling
+
+For trend-style profiling, sample the running systemd service over time:
+
+```bash
+make profile-rknn-service
+```
+
+The default target samples for 300 seconds at a 30-second interval. For a short
+validation run:
+
+```bash
+python3 scripts/profile_rknn_service.py --duration-sec 60 --interval-sec 15
+```
+
+The profiler writes local, git-ignored artifacts under:
+
+```text
+runs/rk3576_service_profiles/<timestamp>/
+  samples.json
+  summary.json
+  summary.md
+```
+
+Verified 60-second profiling result:
+
+```text
+Snapshot: runs/rk3576_service_profiles/20260804T212207Z/
+Samples: 5
+Active all samples: True
+Running all samples: True
+Restart count delta: 0
+Frames processed delta: 820
+Uptime delta: 60.236 sec
+End-to-end FPS mean: 14.366
+Inference FPS mean: 24.950
+Process CPU mean: 79.280%
+RSS mean: 315013.6 KB
+RSS delta: 23064 KB
+NPU temperature mean: 43.276 C
+Last-frame errors: []
+```
+
+This adds a trend view on top of single snapshots. The important stability
+signals are stable systemd state, zero restart increase, frame count increasing,
+no last-frame errors, bounded memory growth, and temperatures far below thermal
+throttling territory.
+
 Restart or stop:
 
 ```bash
