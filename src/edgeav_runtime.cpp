@@ -9,6 +9,7 @@
 extern "C" {
 #include "camera_capture.h"
 #include "pipeline.h"
+#include "rknn_detector.h"
 }
 
 namespace {
@@ -17,10 +18,15 @@ struct RuntimeConfig {
     const char *device = "/dev/video0";
     const char *report_path = "out/edgeav_runtime_report.json";
     const char *heartbeat_path = "out/edgeav_runtime_heartbeat.json";
+    const char *rknn_model_path = nullptr;
+    const char *rknn_library_path = "/usr/lib/librknnrt.so";
+    const char *rknn_report_path = "out/edgeav_rknn_report.json";
     uint32_t width = 640;
     uint32_t height = 480;
     uint32_t fps = 30;
     uint32_t frames = 60;
+    uint32_t rknn_runs = 10;
+    uint32_t rknn_warmup = 3;
     PixelFormat pixel_format = PIXEL_FORMAT_YUYV;
     bool simulate = false;
 };
@@ -51,6 +57,11 @@ void print_usage(const char *program)
     printf("  --report PATH          JSON report path\n");
     printf("  --heartbeat PATH       JSON heartbeat path\n");
     printf("  --simulate             Use synthetic frames instead of opening V4L2\n");
+    printf("  --rknn-model PATH      Optional RKNN model smoke test\n");
+    printf("  --rknn-lib PATH        RKNN runtime library, default /usr/lib/librknnrt.so\n");
+    printf("  --rknn-report PATH     RKNN tensor/inference JSON report path\n");
+    printf("  --rknn-runs N          RKNN measured runs, default 10\n");
+    printf("  --rknn-warmup N        RKNN warmup runs, default 3\n");
 }
 
 bool parse_u32(const char *text, uint32_t *value)
@@ -97,6 +108,20 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
             config->heartbeat_path = argv[++index];
         } else if (strcmp(argv[index], "--simulate") == 0) {
             config->simulate = true;
+        } else if (strcmp(argv[index], "--rknn-model") == 0 && index + 1 < argc) {
+            config->rknn_model_path = argv[++index];
+        } else if (strcmp(argv[index], "--rknn-lib") == 0 && index + 1 < argc) {
+            config->rknn_library_path = argv[++index];
+        } else if (strcmp(argv[index], "--rknn-report") == 0 && index + 1 < argc) {
+            config->rknn_report_path = argv[++index];
+        } else if (strcmp(argv[index], "--rknn-runs") == 0 && index + 1 < argc) {
+            if (!parse_u32(argv[++index], &config->rknn_runs)) {
+                return false;
+            }
+        } else if (strcmp(argv[index], "--rknn-warmup") == 0 && index + 1 < argc) {
+            if (!parse_u32(argv[++index], &config->rknn_warmup)) {
+                return false;
+            }
         } else if (strcmp(argv[index], "--help") == 0) {
             print_usage(argv[0]);
             exit(0);
@@ -253,11 +278,31 @@ int main(int argc, char **argv)
     write_json(config.heartbeat_path, config, stats, status);
     write_json(config.report_path, config, stats, status);
 
-    printf("edgeav_runtime status=%s frames=%llu fps=%.3f report=%s heartbeat=%s\n",
+    int rknn_result = 0;
+    if (config.rknn_model_path) {
+        RknnSmokeConfig rknn_config = {
+            config.rknn_model_path,
+            config.rknn_library_path,
+            config.rknn_report_path,
+            config.rknn_runs,
+            config.rknn_warmup,
+            0,
+        };
+        rknn_result = rknn_detector_smoke(&rknn_config);
+    }
+
+    printf("edgeav_runtime status=%s frames=%llu fps=%.3f report=%s heartbeat=%s",
                 status,
                 static_cast<unsigned long long>(stats.frames),
                 fps_from_stats(stats),
                 config.report_path,
                 config.heartbeat_path);
-    return result == 0 ? 0 : 2;
+    if (config.rknn_model_path) {
+        printf(" rknn_status=%s rknn_report=%s", rknn_result == 0 ? "ok" : "error", config.rknn_report_path);
+    }
+    printf("\n");
+    if (result != 0) {
+        return 2;
+    }
+    return rknn_result == 0 ? 0 : rknn_result;
 }

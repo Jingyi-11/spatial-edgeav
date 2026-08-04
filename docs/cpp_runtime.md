@@ -121,15 +121,80 @@ Phase 5F: systemd service replacement for Python loop
 
 ## Current Boundary
 
-The Phase 5A runtime does not yet run the RKNN model. The current RKNN inference
-service remains:
+## Phase 5B: RKNN C API Smoke Test
+
+The C/C++ runtime now has a small `rknn_detector` module:
+
+```text
+include/rknn_api_compat.h
+include/rknn_detector.h
+src/rknn_detector.cpp
+```
+
+It dynamically loads `librknnrt.so` with `dlopen`, then calls the RKNN C API
+boundary:
+
+```text
+rknn_init
+rknn_query
+rknn_inputs_set
+rknn_run
+rknn_outputs_get
+rknn_outputs_release
+rknn_destroy
+```
+
+The repo intentionally keeps a minimal compatibility header instead of requiring
+`rknn_api.h` to exist on the Mac. The RK3576 board currently has
+`/usr/lib/librknnrt.so`, but no system-wide `rknn_api.h`.
+
+Run through the existing deploy target:
+
+```bash
+make deploy-cpp-runtime-board
+```
+
+Verified RK3576 C API smoke result:
+
+```text
+status: ok
+model: /home/kickpi/spatial-edgeav/models/yolov8n/yolov8n_rockchip_rk3576_i8.rknn
+library: /usr/lib/librknnrt.so
+RKNN API: 2.3.2
+RKNN driver: 0.9.7
+inputs: 1
+outputs: 9
+mean inference: 34.568 ms
+```
+
+The generated report is:
+
+```text
+runs/rk3576_cpp_runtime/edgeav_runtime_rknn_report.json
+```
+
+The tensor metadata confirms the accepted Rockchip optimized YOLOv8n RKNN
+layout:
+
+```text
+input:  [1, 640, 640, 3], NHWC, INT8
+output: 9 tensors across 80x80, 40x40, and 20x20 branches
+```
+
+This test uses a zero-filled synthetic input buffer. It validates the RKNN C API
+boundary, NPU execution, output retrieval, SDK/driver version, and tensor
+metadata. It does not yet validate detection quality because YOLOv8 DFL/NMS
+postprocessing is still in Python.
+
+## Current Boundary
+
+The Phase 5B runtime can load and execute the RKNN model through the C API. The
+current full detection service remains:
 
 ```text
 scripts/rk3576_rknn_camera_loop.py
 systemd/spatial-edgeav-rknn.service
 ```
 
-The next engineering step is to add a small `rknn_detector` C++ module that
-loads the accepted INT8 RKNN model, calls `rknn_init`, `rknn_inputs_set`,
-`rknn_run`, and `rknn_outputs_get`, then writes output tensor metadata before
-implementing YOLO postprocessing.
+The next engineering step is Phase 5C: port YOLOv8 output decoding, DFL,
+candidate filtering, and NMS from Python to C++.

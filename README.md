@@ -199,6 +199,17 @@ status: ok, frames: 30, measured FPS: 29.457
 report: runs/rk3576_cpp_runtime/edgeav_runtime_sim_report.json
 ```
 
+Verified RK3576 RKNN C API smoke test:
+
+```text
+status: ok
+RKNN API: 2.3.2, driver: 0.9.7
+input: [1, 640, 640, 3] NHWC INT8
+outputs: 9 tensors
+mean inference: 34.568 ms
+report: runs/rk3576_cpp_runtime/edgeav_runtime_rknn_report.json
+```
+
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
 ## RK3567/RK3576 Media Scripts
