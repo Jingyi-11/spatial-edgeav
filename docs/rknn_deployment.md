@@ -118,7 +118,50 @@ runs/model_exports/yolov8n/yolov8n_rk3576_i8.report.json
 
 ## Board Runtime Work
 
-After RKNN files exist, the next step is board-side inference:
+After RKNN files exist, install the board runtime once:
+
+```bash
+make setup-rknn-board
+```
+
+This command copies `scripts/rk3576_setup_rknn_runtime.sh` to the board and
+runs it in an interactive SSH session. It installs:
+
+```text
+python3-pip
+python3-numpy
+python3-opencv
+v4l-utils
+rknn-toolkit-lite2==2.3.2
+```
+
+Then deploy the model and run the board diagnostic:
+
+```bash
+make deploy-rknn-board
+```
+
+The command copies the RKNN model, a sample frame when available, and the
+board-side smoke-test helper to:
+
+```text
+/home/kickpi/spatial-edgeav/models/yolov8n/
+/home/kickpi/spatial-edgeav/bin/
+/home/kickpi/spatial-edgeav/runs/rknn_smoke/
+```
+
+The board report is copied back to:
+
+```text
+runs/rk3576_board/rk3576_rknn_report.json
+```
+
+The smoke-test helper is diagnostic-first. If RKNN Lite or image dependencies
+are missing, it still records model size, board platform, available device
+nodes, and missing Python modules. Once RKNN Lite is installed on the board,
+the same command becomes a single-image NPU benchmark.
+
+Target runtime path:
 
 ```text
 RK3576 camera frame
@@ -140,3 +183,20 @@ end-to-end latency
 FPS over 30-300 frames
 CPU and memory usage
 ```
+
+## Current Board Finding
+
+The board is reachable over SSH as `rk3576`, runs Ubuntu 24.04 on aarch64, and
+has the Logitech C920 exposed as `/dev/video73`. The current user belongs to
+the `video` and `render` groups. Python-side runtime packages are not installed
+yet on the board:
+
+```text
+rknnlite: missing
+numpy: missing
+cv2: missing
+```
+
+Run `make setup-rknn-board` from a local terminal, enter the `kickpi` sudo
+password when prompted, then rerun `make deploy-rknn-board` to collect real NPU
+latency.

@@ -231,6 +231,20 @@ Convert ONNX to RKNN FP model for RK3576:
 make convert-rknn-fp
 ```
 
+Install the RK3576 board runtime once. This opens an interactive SSH session
+because `apt` needs the board user's sudo password:
+
+```bash
+make setup-rknn-board
+```
+
+Deploy the RKNN model to the RK3576 board and collect a board-side diagnostic
+or NPU benchmark report:
+
+```bash
+make deploy-rknn-board
+```
+
 Verified outputs are generated locally under `runs/model_exports/yolov8n/`:
 
 ```text
@@ -264,10 +278,13 @@ include/
 scripts/
   evaluate_spatial_rules.py
   mac_camera_baseline.py
+  rk3576_setup_rknn_runtime.sh
   rk3576_camera_smoke_test.sh
   rk3576_camera_tune.sh
   rk3576_stream_baseline.sh
   run_remote_yolo_pipeline.sh
+  deploy_rknn_to_rk3576.sh
+  rk3576_rknn_smoke_test.py
   wsl_setup_rknn_toolkit2.sh
   wsl_export_yolov8_onnx.sh
   wsl_convert_yolov8_rknn.sh
