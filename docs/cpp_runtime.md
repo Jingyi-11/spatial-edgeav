@@ -164,7 +164,7 @@ RKNN API: 2.3.2
 RKNN driver: 0.9.7
 inputs: 1
 outputs: 9
-mean inference: 34.568 ms
+mean inference: about 34-36 ms
 ```
 
 The generated report is:
@@ -182,19 +182,62 @@ output: 9 tensors across 80x80, 40x40, and 20x20 branches
 ```
 
 This test uses a zero-filled synthetic input buffer. It validates the RKNN C API
-boundary, NPU execution, output retrieval, SDK/driver version, and tensor
-metadata. It does not yet validate detection quality because YOLOv8 DFL/NMS
-postprocessing is still in Python.
+boundary, NPU execution, output retrieval, SDK/driver version, tensor metadata,
+and the C++ YOLOv8 optimized-head postprocess path. Detection quality is still
+validated by the Python camera service until Phase 5D feeds real camera frames
+through the C++ runtime.
+
+## Phase 5C: C++ YOLOv8 Optimized-Head Decode
+
+The C/C++ runtime now decodes the Rockchip optimized YOLOv8n RKNN output layout
+inside `src/rknn_detector.cpp`.
+
+Implemented:
+
+```text
+9 RKNN outputs
+  -> group tensors into 80x80, 40x40, 20x20 branches
+  -> match box distribution, class scores, and optional score_sum tensors
+  -> dequantize INT8/UINT8 tensor values using scale and zero point
+  -> use class score + score_sum for early candidate filtering
+  -> run DFL only on selected candidates
+  -> run same-class IoU + containment NMS
+  -> write postprocess metadata and detections to RKNN JSON report
+```
+
+The implementation intentionally avoids STL containers in this hot path and
+uses fixed-size arrays instead. This keeps the board-side build less dependent
+on host C++ standard library availability and makes the memory ceiling explicit
+for embedded deployment.
+
+Verified RK3576 result:
+
+```text
+postprocess status: ok
+type: rockchip_yolov8_optimized_head
+output groups: 3
+candidate grids: 80x80, 40x40, 20x20
+mean inference: 34.466 ms
+detections after NMS: 0
+```
+
+Zero detections are expected for this smoke test because the runtime currently
+feeds a zero-filled synthetic input buffer to the model. The value of this phase
+is that the C++ runtime can now recognize the RKNN output layout, dequantize
+tensor values, execute candidate filtering, DFL, and NMS, and produce the same
+kind of JSON detection surface that the live camera service needs.
 
 ## Current Boundary
 
-The Phase 5B runtime can load and execute the RKNN model through the C API. The
-current full detection service remains:
+The Phase 5C runtime can load and execute the RKNN model through the C API and
+run C++ YOLOv8 optimized-head postprocessing on the returned tensors. The
+current full live-camera detection service remains:
 
 ```text
 scripts/rk3576_rknn_camera_loop.py
 systemd/spatial-edgeav-rknn.service
 ```
 
-The next engineering step is Phase 5C: port YOLOv8 output decoding, DFL,
-candidate filtering, and NMS from Python to C++.
+The next engineering step is Phase 5D: feed real V4L2 camera frames through the
+C++ runtime, convert/resize them to the RKNN input tensor, and compare C++
+detections against the current Python live-camera service.

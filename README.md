@@ -206,7 +206,10 @@ status: ok
 RKNN API: 2.3.2, driver: 0.9.7
 input: [1, 640, 640, 3] NHWC INT8
 outputs: 9 tensors
-mean inference: 34.568 ms
+postprocess: rockchip_yolov8_optimized_head, 3 output groups
+candidate filter: class_score_and_score_sum
+detections after NMS: 0 for zero-filled smoke input
+mean inference: 34.466 ms
 report: runs/rk3576_cpp_runtime/edgeav_runtime_rknn_report.json
 ```
 

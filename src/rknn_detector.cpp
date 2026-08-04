@@ -7,6 +7,7 @@ extern "C" {
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +36,52 @@ struct RknnApi {
 
 struct TensorSummary {
     RknnTensorAttr attr;
+};
+
+constexpr uint32_t kYoloImageSize = 640;
+constexpr float kConfidenceThreshold = 0.25f;
+constexpr float kIouThreshold = 0.45f;
+constexpr float kContainmentThreshold = 0.85f;
+constexpr uint32_t kMaxDetections = 100;
+constexpr uint32_t kMaxYoloGroups = 8;
+constexpr uint32_t kMaxCandidates = 8400;
+
+struct Detection {
+    int id = 0;
+    int class_id = 0;
+    float confidence = 0.0f;
+    float x1 = 0.0f;
+    float y1 = 0.0f;
+    float x2 = 0.0f;
+    float y2 = 0.0f;
+};
+
+struct CandidateStat {
+    uint32_t height = 0;
+    uint32_t width = 0;
+    uint32_t positions = 0;
+    uint32_t candidates = 0;
+};
+
+struct DecodeSummary {
+    bool attempted = false;
+    bool supported = false;
+    const char *type = "unsupported";
+    uint32_t output_groups = 0;
+    uint32_t candidates_before_nms = 0;
+    uint32_t detections_before_nms = 0;
+    uint32_t candidate_stat_count = 0;
+    CandidateStat candidate_stats[kMaxYoloGroups];
+    uint32_t detection_count = 0;
+    Detection detections[kMaxDetections];
+};
+
+struct YoloGroup {
+    int box_index = -1;
+    int score_index = -1;
+    int score_sum_index = -1;
+    uint32_t height = 0;
+    uint32_t width = 0;
 };
 
 const char *tensor_type_name(RknnTensorType type)
@@ -161,6 +208,294 @@ size_t tensor_type_bytes(RknnTensorType type)
     }
 }
 
+bool is_nchw_4d_with_channels(const RknnTensorAttr &attr, uint32_t channels)
+{
+    return attr.n_dims == 4 && attr.fmt == RKNN_TENSOR_NCHW && attr.dims[0] == 1 && attr.dims[1] == channels && attr.dims[2] > 0 && attr.dims[3] > 0;
+}
+
+float tensor_value(const RknnTensorAttr &attr, const RknnOutput &output, uint32_t channel, uint32_t y, uint32_t x)
+{
+    uint32_t height = attr.dims[2];
+    uint32_t width = attr.dims[3];
+    size_t offset = (static_cast<size_t>(channel) * height + y) * width + x;
+
+    if (output.want_float) {
+        const auto *data = static_cast<const float *>(output.buf);
+        return data[offset];
+    }
+
+    const auto *base = static_cast<const uint8_t *>(output.buf);
+    switch (attr.type) {
+    case RKNN_TENSOR_INT8: {
+        int32_t raw = static_cast<int32_t>(reinterpret_cast<const int8_t *>(base)[offset]);
+        return (static_cast<float>(raw) - static_cast<float>(attr.zp)) * attr.scale;
+    }
+    case RKNN_TENSOR_UINT8: {
+        int32_t raw = static_cast<int32_t>(base[offset]);
+        return (static_cast<float>(raw) - static_cast<float>(attr.zp)) * attr.scale;
+    }
+    case RKNN_TENSOR_INT16: {
+        int32_t raw = static_cast<int32_t>(reinterpret_cast<const int16_t *>(base)[offset]);
+        return (static_cast<float>(raw) - static_cast<float>(attr.zp)) * attr.scale;
+    }
+    case RKNN_TENSOR_UINT16: {
+        int32_t raw = static_cast<int32_t>(reinterpret_cast<const uint16_t *>(base)[offset]);
+        return (static_cast<float>(raw) - static_cast<float>(attr.zp)) * attr.scale;
+    }
+    case RKNN_TENSOR_FLOAT32:
+        return reinterpret_cast<const float *>(base)[offset];
+    default:
+        return 0.0f;
+    }
+}
+
+float clampf(float value, float low, float high)
+{
+    if (value < low) {
+        return low;
+    }
+    if (value > high) {
+        return high;
+    }
+    return value;
+}
+
+float box_iou(const Detection &a, const Detection &b)
+{
+    float ix1 = a.x1 > b.x1 ? a.x1 : b.x1;
+    float iy1 = a.y1 > b.y1 ? a.y1 : b.y1;
+    float ix2 = a.x2 < b.x2 ? a.x2 : b.x2;
+    float iy2 = a.y2 < b.y2 ? a.y2 : b.y2;
+    float iw = ix2 > ix1 ? ix2 - ix1 : 0.0f;
+    float ih = iy2 > iy1 ? iy2 - iy1 : 0.0f;
+    float intersection = iw * ih;
+    float aw = a.x2 > a.x1 ? a.x2 - a.x1 : 0.0f;
+    float ah = a.y2 > a.y1 ? a.y2 - a.y1 : 0.0f;
+    float bw = b.x2 > b.x1 ? b.x2 - b.x1 : 0.0f;
+    float bh = b.y2 > b.y1 ? b.y2 - b.y1 : 0.0f;
+    float area_a = aw * ah;
+    float area_b = bw * bh;
+    float union_area = area_a + area_b - intersection;
+    return union_area > 0.0f ? intersection / union_area : 0.0f;
+}
+
+float box_intersection_over_smaller_area(const Detection &a, const Detection &b)
+{
+    float ix1 = a.x1 > b.x1 ? a.x1 : b.x1;
+    float iy1 = a.y1 > b.y1 ? a.y1 : b.y1;
+    float ix2 = a.x2 < b.x2 ? a.x2 : b.x2;
+    float iy2 = a.y2 < b.y2 ? a.y2 : b.y2;
+    float iw = ix2 > ix1 ? ix2 - ix1 : 0.0f;
+    float ih = iy2 > iy1 ? iy2 - iy1 : 0.0f;
+    float intersection = iw * ih;
+    float aw = a.x2 > a.x1 ? a.x2 - a.x1 : 0.0f;
+    float ah = a.y2 > a.y1 ? a.y2 - a.y1 : 0.0f;
+    float bw = b.x2 > b.x1 ? b.x2 - b.x1 : 0.0f;
+    float bh = b.y2 > b.y1 ? b.y2 - b.y1 : 0.0f;
+    float area_a = aw * ah;
+    float area_b = bw * bh;
+    float smaller = area_a < area_b ? area_a : area_b;
+    return smaller > 0.0f ? intersection / smaller : 0.0f;
+}
+
+uint32_t group_rockchip_yolov8_outputs(const TensorSummary *outputs, uint32_t output_count, YoloGroup groups[kMaxYoloGroups])
+{
+    uint32_t group_count = 0;
+    for (uint32_t index = 0; index < output_count; ++index) {
+        const RknnTensorAttr &candidate = outputs[index].attr;
+        if (!is_nchw_4d_with_channels(candidate, 64) || group_count >= kMaxYoloGroups) {
+            continue;
+        }
+
+        YoloGroup group;
+        group.box_index = static_cast<int>(index);
+        group.height = candidate.dims[2];
+        group.width = candidate.dims[3];
+
+        for (uint32_t other = 0; other < output_count; ++other) {
+            const RknnTensorAttr &attr = outputs[other].attr;
+            if (attr.n_dims != 4 || attr.fmt != RKNN_TENSOR_NCHW || attr.dims[2] != group.height || attr.dims[3] != group.width) {
+                continue;
+            }
+            if (attr.dims[1] == 80) {
+                group.score_index = static_cast<int>(other);
+            } else if (attr.dims[1] == 1) {
+                group.score_sum_index = static_cast<int>(other);
+            }
+        }
+
+        if (group.score_index >= 0) {
+            groups[group_count++] = group;
+        }
+    }
+
+    for (uint32_t i = 0; i < group_count; ++i) {
+        for (uint32_t j = i + 1; j < group_count; ++j) {
+            if (groups[j].height * groups[j].width > groups[i].height * groups[i].width) {
+                YoloGroup temp = groups[i];
+                groups[i] = groups[j];
+                groups[j] = temp;
+            }
+        }
+    }
+    return group_count;
+}
+
+void decode_dfl_distances(
+    const RknnTensorAttr &box_attr,
+    const RknnOutput &box_output,
+    uint32_t x,
+    uint32_t y,
+    float distances[4])
+{
+    constexpr uint32_t kSides = 4;
+    uint32_t bins = box_attr.dims[1] / kSides;
+    for (uint32_t side = 0; side < kSides; ++side) {
+        float max_logit = -INFINITY;
+        for (uint32_t bin = 0; bin < bins; ++bin) {
+            float value = tensor_value(box_attr, box_output, side * bins + bin, y, x);
+            max_logit = value > max_logit ? value : max_logit;
+        }
+
+        float sum = 0.0f;
+        float weighted_sum = 0.0f;
+        for (uint32_t bin = 0; bin < bins; ++bin) {
+            float probability = expf(tensor_value(box_attr, box_output, side * bins + bin, y, x) - max_logit);
+            sum += probability;
+            weighted_sum += probability * static_cast<float>(bin);
+        }
+        distances[side] = sum > 0.0f ? weighted_sum / sum : 0.0f;
+    }
+}
+
+int compare_detection_confidence_desc(const void *left, const void *right)
+{
+    const auto *a = static_cast<const Detection *>(left);
+    const auto *b = static_cast<const Detection *>(right);
+    if (a->confidence < b->confidence) {
+        return 1;
+    }
+    if (a->confidence > b->confidence) {
+        return -1;
+    }
+    return 0;
+}
+
+uint32_t nms(const Detection *candidates, uint32_t candidate_count, Detection kept[kMaxDetections])
+{
+    uint32_t kept_count = 0;
+    for (uint32_t index = 0; index < candidate_count; ++index) {
+        const Detection &candidate = candidates[index];
+        bool suppress = false;
+        for (uint32_t kept_index = 0; kept_index < kept_count; ++kept_index) {
+            const Detection &current = kept[kept_index];
+            if (candidate.class_id != current.class_id) {
+                continue;
+            }
+            if (box_iou(candidate, current) >= kIouThreshold || box_intersection_over_smaller_area(candidate, current) >= kContainmentThreshold) {
+                suppress = true;
+                break;
+            }
+        }
+        if (!suppress) {
+            Detection kept_detection = candidate;
+            kept_detection.id = static_cast<int>(kept_count);
+            kept[kept_count++] = kept_detection;
+            if (kept_count >= kMaxDetections) {
+                break;
+            }
+        }
+    }
+    return kept_count;
+}
+
+DecodeSummary decode_rockchip_yolov8_outputs(
+    const TensorSummary *output_attrs,
+    const RknnOutput *rknn_outputs,
+    uint32_t output_count)
+{
+    DecodeSummary summary;
+    summary.attempted = true;
+    YoloGroup groups[kMaxYoloGroups];
+    uint32_t group_count = group_rockchip_yolov8_outputs(output_attrs, output_count, groups);
+    summary.output_groups = group_count;
+    if (group_count == 0) {
+        return summary;
+    }
+
+    summary.supported = true;
+    summary.type = "rockchip_yolov8_optimized_head";
+
+    Detection candidates[kMaxCandidates];
+    uint32_t candidate_count = 0;
+    for (uint32_t group_index = 0; group_index < group_count; ++group_index) {
+        const YoloGroup &group = groups[group_index];
+        const RknnTensorAttr &box_attr = output_attrs[group.box_index].attr;
+        const RknnTensorAttr &score_attr = output_attrs[group.score_index].attr;
+        const RknnOutput &box_output = rknn_outputs[group.box_index];
+        const RknnOutput &score_output = rknn_outputs[group.score_index];
+        const RknnTensorAttr *score_sum_attr = group.score_sum_index >= 0 ? &output_attrs[group.score_sum_index].attr : nullptr;
+        const RknnOutput *score_sum_output = group.score_sum_index >= 0 ? &rknn_outputs[group.score_sum_index] : nullptr;
+
+        CandidateStat stat;
+        stat.height = group.height;
+        stat.width = group.width;
+        stat.positions = group.height * group.width;
+
+        float stride_x = static_cast<float>(kYoloImageSize) / static_cast<float>(group.width);
+        float stride_y = static_cast<float>(kYoloImageSize) / static_cast<float>(group.height);
+
+        for (uint32_t y = 0; y < group.height; ++y) {
+            for (uint32_t x = 0; x < group.width; ++x) {
+                int best_class = 0;
+                float best_score = tensor_value(score_attr, score_output, 0, y, x);
+                for (uint32_t class_id = 1; class_id < score_attr.dims[1]; ++class_id) {
+                    float score = tensor_value(score_attr, score_output, class_id, y, x);
+                    if (score > best_score) {
+                        best_score = score;
+                        best_class = static_cast<int>(class_id);
+                    }
+                }
+                if (best_score < kConfidenceThreshold) {
+                    continue;
+                }
+                if (score_sum_attr && score_sum_output && tensor_value(*score_sum_attr, *score_sum_output, 0, y, x) < kConfidenceThreshold) {
+                    continue;
+                }
+
+                float distances[4];
+                decode_dfl_distances(box_attr, box_output, x, y, distances);
+
+                float grid_x = static_cast<float>(x) + 0.5f;
+                float grid_y = static_cast<float>(y) + 0.5f;
+                Detection detection;
+                detection.class_id = best_class;
+                detection.confidence = best_score;
+                detection.x1 = clampf((grid_x - distances[0]) * stride_x, 0.0f, static_cast<float>(kYoloImageSize));
+                detection.y1 = clampf((grid_y - distances[1]) * stride_y, 0.0f, static_cast<float>(kYoloImageSize));
+                detection.x2 = clampf((grid_x + distances[2]) * stride_x, 0.0f, static_cast<float>(kYoloImageSize));
+                detection.y2 = clampf((grid_y + distances[3]) * stride_y, 0.0f, static_cast<float>(kYoloImageSize));
+                if (detection.x2 <= detection.x1 || detection.y2 <= detection.y1) {
+                    continue;
+                }
+                if (candidate_count < kMaxCandidates) {
+                    candidates[candidate_count++] = detection;
+                }
+                stat.candidates++;
+            }
+        }
+        if (summary.candidate_stat_count < kMaxYoloGroups) {
+            summary.candidate_stats[summary.candidate_stat_count++] = stat;
+        }
+    }
+
+    summary.candidates_before_nms = candidate_count;
+    summary.detections_before_nms = candidate_count;
+    qsort(candidates, candidate_count, sizeof(candidates[0]), compare_detection_confidence_desc);
+    summary.detection_count = nms(candidates, candidate_count, summary.detections);
+    return summary;
+}
+
 uint32_t fallback_input_size(const RknnTensorAttr *attr)
 {
     if (attr->size > 0) {
@@ -204,7 +539,8 @@ void write_report(
     const TensorSummary *outputs,
     int status,
     const char *stage,
-    double inference_mean_ms)
+    double inference_mean_ms,
+    const DecodeSummary *decode_summary)
 {
     FILE *file = fopen(path, "w");
     if (!file) {
@@ -221,6 +557,51 @@ void write_report(
     fprintf(file, "  \"sdk\": {\"api_version\": \"%s\", \"drv_version\": \"%s\"},\n", version->api_version, version->drv_version);
     fprintf(file, "  \"io_num\": {\"n_input\": %u, \"n_output\": %u},\n", io_num->n_input, io_num->n_output);
     fprintf(file, "  \"inference_ms\": {\"mean\": %.3f},\n", inference_mean_ms);
+    if (decode_summary && decode_summary->attempted) {
+        fprintf(file, "  \"postprocess\": {\n");
+        fprintf(file, "    \"status\": \"%s\",\n", decode_summary->supported ? "ok" : "unsupported");
+        fprintf(file, "    \"type\": \"%s\",\n", decode_summary->type);
+        fprintf(file, "    \"image_size\": %u,\n", kYoloImageSize);
+        fprintf(file, "    \"candidate_filter\": \"class_score_and_score_sum\",\n");
+        fprintf(file, "    \"confidence_threshold\": %.3f,\n", kConfidenceThreshold);
+        fprintf(file, "    \"iou_threshold\": %.3f,\n", kIouThreshold);
+        fprintf(file, "    \"containment_threshold\": %.3f,\n", kContainmentThreshold);
+        fprintf(file, "    \"output_groups\": %u,\n", decode_summary->output_groups);
+        fprintf(file, "    \"candidate_stats\": [");
+        for (uint32_t index = 0; index < decode_summary->candidate_stat_count; ++index) {
+            const CandidateStat &stat = decode_summary->candidate_stats[index];
+            fprintf(file, "%s{\"grid\": [%u, %u], \"positions\": %u, \"candidates\": %u}",
+                    index == 0 ? "" : ", ",
+                    stat.height,
+                    stat.width,
+                    stat.positions,
+                    stat.candidates);
+        }
+        fprintf(file, "],\n");
+        fprintf(file, "    \"candidates_before_nms\": %u,\n", decode_summary->candidates_before_nms);
+        fprintf(file, "    \"detections_before_nms\": %u,\n", decode_summary->detections_before_nms);
+        fprintf(file, "    \"detections_after_nms\": %u,\n", decode_summary->detection_count);
+        fprintf(file, "    \"max_detections\": %u\n", kMaxDetections);
+        fprintf(file, "  },\n");
+        fprintf(file, "  \"detections\": [\n");
+        for (uint32_t index = 0; index < decode_summary->detection_count; ++index) {
+            const Detection &det = decode_summary->detections[index];
+            fprintf(file, "    {\"id\": %d, \"class_id\": %d, \"confidence\": %.4f, \"bbox_xyxy\": [%.2f, %.2f, %.2f, %.2f], \"bbox_xywh\": [%.2f, %.2f, %.2f, %.2f]}%s\n",
+                    det.id,
+                    det.class_id,
+                    det.confidence,
+                    det.x1,
+                    det.y1,
+                    det.x2,
+                    det.y2,
+                    det.x1,
+                    det.y1,
+                    det.x2 - det.x1,
+                    det.y2 - det.y1,
+                    index + 1 < decode_summary->detection_count ? "," : "");
+        }
+        fprintf(file, "  ],\n");
+    }
     fprintf(file, "  \"tensors\": [\n");
     uint32_t total = io_num->n_input + io_num->n_output;
     uint32_t written = 0;
@@ -323,6 +704,7 @@ int rknn_detector_smoke(const RknnSmokeConfig *config)
     double total_ms = 0.0;
     int status = 0;
     const char *stage = "ok";
+    DecodeSummary decode_summary;
 
     for (uint32_t index = 0; index < warmup + runs; ++index) {
         ret = api.inputs_set(ctx, 1, &input);
@@ -363,12 +745,15 @@ int rknn_detector_smoke(const RknnSmokeConfig *config)
         if (index >= warmup) {
             total_ms += static_cast<double>(end_us - start_us) / 1000.0;
         }
+        if (status == 0 && index + 1 == warmup + runs) {
+            decode_summary = decode_rockchip_yolov8_outputs(outputs, rknn_outputs, io_num.n_output);
+        }
         api.outputs_release(ctx, io_num.n_output, rknn_outputs);
         free(rknn_outputs);
     }
 
     double mean_ms = status == 0 ? total_ms / runs : 0.0;
-    write_report(config->report_path, config, &version, &io_num, inputs, outputs, status, stage, mean_ms);
+    write_report(config->report_path, config, &version, &io_num, inputs, outputs, status, stage, mean_ms, &decode_summary);
 
     free(input_buffer);
     free(inputs);
