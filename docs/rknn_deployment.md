@@ -382,6 +382,70 @@ class scores and bounding boxes. It still needs calibration-set and threshold
 tuning because the FP reference's lower-confidence `surfboard` detection is
 not recovered at the current `0.25` threshold.
 
+## Phase 3D: Continuous Camera RKNN Inference
+
+The single-image smoke test is now extended into a continuous RK3576 USB-camera
+loop. The board-side runner opens the C920 with OpenCV/V4L2, captures MJPEG
+frames from `/dev/video73`, resizes each frame to the YOLO input size, runs
+RKNN inference, decodes detections, and writes:
+
+```text
+runs/rk3576_camera_rknn/yolov8n_rockchip_rk3576_i8_camera_report.json
+runs/rk3576_camera_rknn/yolov8n_rockchip_rk3576_i8_camera_frames.json
+runs/rk3576_camera_rknn/yolov8n_rockchip_rk3576_i8_camera_last.jpg
+```
+
+Reproducible command:
+
+```bash
+make run-rknn-camera-board
+```
+
+Verified 60-frame RK3576 camera run:
+
+```json
+{
+  "status": "ok",
+  "camera": {
+    "device": "/dev/video73",
+    "width": 1280,
+    "height": 720,
+    "fps": 30
+  },
+  "frames_requested": 60,
+  "frames_processed": 60,
+  "latency_ms": {
+    "capture_mean": 15.54,
+    "preprocess_mean": 3.535,
+    "inference_mean": 39.685,
+    "postprocess_mean": 33.843,
+    "end_to_end_mean": 92.605
+  },
+  "fps": {
+    "inference_only": 25.199,
+    "end_to_end": 10.798
+  },
+  "detections_by_class": {
+    "chair": 60,
+    "surfboard": 55,
+    "bottle": 15,
+    "umbrella": 3
+  }
+}
+```
+
+The important finding is that RKNN inference is no longer the only bottleneck.
+The current Python YOLO postprocess averages `33.843 ms`, close to the NPU
+inference cost of `39.685 ms`. The next optimization target is therefore
+postprocess reduction:
+
+```text
+use score-sum tensor for early candidate filtering
+vectorize class filtering before DFL
+move DFL/NMS into C++ or optimized NumPy
+switch resize/preprocess to RGA or zero-copy buffers
+```
+
 The dynamic range warning printed by RKNN Runtime is expected for this static
 shape export:
 

@@ -240,10 +240,10 @@ Near-term:
 
 ```text
 continuous RK3576 capture
-  -> frame sampling
-  -> WSL batch inference
-  -> JSONL event log
-  -> spatial rule evaluation
+  -> RKNN INT8 inference on board
+  -> per-frame detections JSON
+  -> latency/FPS report
+  -> annotated camera frame
 ```
 
 Deployment path:
@@ -254,7 +254,18 @@ custom YOLO training on WSL
   -> RKNN Toolkit2 conversion
   -> INT8 calibration
   -> RK3576 RKNN runtime
-  -> C++ service with systemd
+  -> Python continuous baseline
+  -> optimized C++ service with systemd
+```
+
+Next performance step:
+
+```text
+Python YOLO postprocess
+  -> score-sum filtering / vectorized DFL+NMS
+  -> C++ RKNN runtime service
+  -> JSONL event log
+  -> spatial rule evaluation
 ```
 
 Spatial/VLA-style path:

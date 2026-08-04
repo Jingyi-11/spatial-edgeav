@@ -273,6 +273,12 @@ make deploy-rockchip-yolov8n-i8-board
 make compare-rockchip-i8-detections
 ```
 
+Run continuous RK3576 camera capture plus RKNN inference:
+
+```bash
+make run-rknn-camera-board
+```
+
 Verified RK3576 FP vs INT8 baseline:
 
 ```text
@@ -306,6 +312,17 @@ Latency: mean 62.265 ms, 16.060 FPS
 INT8 detections: person 0.416, bottle 0.353
 FP reference: person 0.406, surfboard 0.365, bottle 0.343
 Status: deployable INT8 path validated; continue tuning calibration and thresholding
+```
+
+Verified continuous RK3576 camera RKNN baseline:
+
+```text
+Input: Logitech C920 on /dev/video73, 1280x720 MJPEG, 60 frames
+Model: Rockchip optimized YOLOv8n INT8 RKNN
+Inference: mean 39.685 ms, 25.199 FPS inference-only
+End-to-end: mean 92.605 ms, 10.798 FPS
+Detected classes across 60 frames: chair 60, surfboard 55, bottle 15, umbrella 3
+Artifacts: camera_report.json, camera_frames.json, camera_last.jpg
 ```
 
 Verified outputs are generated locally under `runs/model_exports/yolov8n/`:

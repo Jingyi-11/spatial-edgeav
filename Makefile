@@ -9,7 +9,7 @@ LDFLAGS ?=
 SOURCES := src/main.c src/pipeline.c src/camera_capture.c src/yuv.c
 OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 
-.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
+.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board run-rknn-camera-board compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
 
 all: $(TARGET)
 
@@ -80,6 +80,9 @@ deploy-rknn-board-i8:
 
 deploy-rockchip-yolov8n-i8-board:
 	bash scripts/deploy_rknn_to_rk3576.sh runs/model_exports/rockchip_yolov8n/yolov8n_rockchip_rk3576_i8.rknn
+
+run-rknn-camera-board:
+	bash scripts/run_rknn_camera_loop_on_rk3576.sh runs/model_exports/rockchip_yolov8n/yolov8n_rockchip_rk3576_i8.rknn /dev/video73 60
 
 compare-rknn-benchmarks:
 	python3 scripts/compare_rknn_benchmarks.py \
