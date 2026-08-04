@@ -10,6 +10,8 @@ REMOTE_BIN_DIR="${REMOTE_ROOT}/bin"
 REMOTE_RUN_DIR="${REMOTE_ROOT}/runs/rknn_smoke"
 MODEL_BASENAME="$(basename "${LOCAL_MODEL}")"
 REPORT_NAME="${MODEL_BASENAME%.rknn}_rk3576_report.json"
+DETECTIONS_NAME="${MODEL_BASENAME%.rknn}_detections.json"
+ANNOTATED_NAME="${MODEL_BASENAME%.rknn}_annotated.jpg"
 SSH_RETRIES="${SSH_RETRIES:-3}"
 SSH_RETRY_DELAY_SEC="${SSH_RETRY_DELAY_SEC:-3}"
 
@@ -79,12 +81,18 @@ retry_command ssh -o BatchMode=yes -o ConnectTimeout=8 "${BOARD_HOST}" \
     --model '${REMOTE_MODEL_DIR}/${MODEL_BASENAME}' \
     ${REMOTE_IMAGE_ARG} \
     --report '${REMOTE_RUN_DIR}/${REPORT_NAME}' \
+    --detections '${REMOTE_RUN_DIR}/${DETECTIONS_NAME}' \
+    --annotated '${REMOTE_RUN_DIR}/${ANNOTATED_NAME}' \
     --runs 30"
 
 echo "Copying board report back to Mac..."
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   "${BOARD_HOST}:${REMOTE_RUN_DIR}/${REPORT_NAME}" \
+  "${BOARD_HOST}:${REMOTE_RUN_DIR}/${DETECTIONS_NAME}" \
+  "${BOARD_HOST}:${REMOTE_RUN_DIR}/${ANNOTATED_NAME}" \
   "${LOCAL_REPORT_DIR}/"
 
 echo "Wrote:"
 echo "  ${LOCAL_REPORT_DIR}/${REPORT_NAME}"
+echo "  ${LOCAL_REPORT_DIR}/${DETECTIONS_NAME}"
+echo "  ${LOCAL_REPORT_DIR}/${ANNOTATED_NAME}"

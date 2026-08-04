@@ -259,6 +259,7 @@ or NPU benchmark report:
 make deploy-rknn-board
 make deploy-rknn-board-i8
 make compare-rknn-benchmarks
+make compare-rknn-detections
 ```
 
 Verified RK3576 FP vs INT8 baseline:
@@ -267,10 +268,24 @@ Verified RK3576 FP vs INT8 baseline:
 Runtime: RKNN Toolkit Lite2 2.3.2, librknnrt 2.3.2, driver 0.9.7
 Input: RK3576 camera sample image, resized to 640x640 RGB
 Output tensor: [1, 84, 8400]
-FP:   13,396,342 bytes, mean 127.974 ms, 7.814 FPS
-INT8: 10,259,536 bytes, mean 62.217 ms, 16.073 FPS
-INT8 improvement: 2.057x speedup, 51.38% latency reduction, 23.42% smaller
+FP:   13,396,278 bytes, mean 125.658 ms, 7.958 FPS
+INT8: 10,259,536 bytes, mean 62.750 ms, 15.936 FPS
+INT8 speed: 2.003x faster, 50.06% latency reduction, 23.42% smaller
 ```
+
+Verified RK3576 FP detection postprocess:
+
+```text
+FP detections: person 0.406, surfboard 0.365, bottle 0.343
+INT8 detections: 0
+Status: INT8 performance passes, INT8 detection quality is not accepted yet
+INT8 diagnosis: bbox branch nonzero, class-score branch all zero
+```
+
+The FP model now produces board-side `detections.json` and `annotated.jpg`.
+The INT8 model runs faster but currently returns zero class scores after
+quantization, so it is kept as an optimization experiment until output
+quantization settings are corrected.
 
 Verified outputs are generated locally under `runs/model_exports/yolov8n/`:
 
@@ -321,6 +336,7 @@ scripts/
   convert_yolov8_onnx_to_rknn.py
   collect_rknn_calibration_frames.sh
   compare_rknn_benchmarks.py
+  compare_rknn_detections.py
   wsl_yolo_smoke_test.sh
   wsl_yolo_infer.py
   0*_rk3567_*.sh                 # board-side RK3567/RK3576 helpers

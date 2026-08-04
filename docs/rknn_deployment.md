@@ -154,6 +154,7 @@ Then deploy the model and run the board diagnostic:
 
 ```bash
 make deploy-rknn-board
+make deploy-rknn-board-i8
 ```
 
 The command copies the RKNN model, a sample frame when available, and the
@@ -168,7 +169,9 @@ board-side smoke-test helper to:
 The board report is copied back to:
 
 ```text
-runs/rk3576_board/rk3576_rknn_report.json
+runs/rk3576_board/*_rk3576_report.json
+runs/rk3576_board/*_detections.json
+runs/rk3576_board/*_annotated.jpg
 ```
 
 The smoke-test helper is diagnostic-first. If RKNN Lite or image dependencies
@@ -189,14 +192,23 @@ Verified board-side FP baseline:
   "runs": 30,
   "warmup": 3,
   "latency_ms": {
-    "mean": 125.322,
-    "median": 127.799,
-    "p95": 147.408,
-    "min": 102.521,
-    "max": 148.351
+    "mean": 125.658,
+    "median": 124.429,
+    "p95": 145.584,
+    "min": 102.124,
+    "max": 148.637
   },
-  "fps": 7.979,
-  "output_shapes": [[1, 84, 8400]]
+  "fps": 7.958,
+  "output_shapes": [[1, 84, 8400]],
+  "output_summary": {
+    "box_nonzero": 33600,
+    "class_score_max": 0.406006,
+    "class_score_nonzero": 672000
+  },
+  "detections": {
+    "count": 3,
+    "classes": ["person", "surfboard", "bottle"]
+  }
 }
 ```
 
@@ -210,14 +222,22 @@ Verified board-side INT8 baseline:
   "model_size_bytes": 10259536,
   "runs": 30,
   "latency_ms": {
-    "mean": 62.217,
-    "median": 61.911,
-    "p95": 73.187,
-    "min": 54.222,
-    "max": 74.16
+    "mean": 62.75,
+    "median": 62.708,
+    "p95": 67.312,
+    "min": 53.334,
+    "max": 69.188
   },
-  "fps": 16.073,
-  "output_shapes": [[1, 84, 8400]]
+  "fps": 15.936,
+  "output_shapes": [[1, 84, 8400]],
+  "output_summary": {
+    "box_nonzero": 33600,
+    "class_score_max": 0.0,
+    "class_score_nonzero": 0
+  },
+  "detections": {
+    "count": 0
+  }
 }
 ```
 
@@ -226,23 +246,50 @@ FP vs INT8 comparison:
 ```json
 {
   "fp": {
-    "model_size_bytes": 13396342,
-    "latency_mean_ms": 127.974,
-    "fps": 7.814
+    "model_size_bytes": 13396278,
+    "latency_mean_ms": 125.658,
+    "fps": 7.958
   },
   "i8": {
     "model_size_bytes": 10259536,
-    "latency_mean_ms": 62.217,
-    "fps": 16.073
+    "latency_mean_ms": 62.75,
+    "fps": 15.936
   },
   "improvement": {
-    "latency_speedup": 2.057,
-    "latency_reduction_pct": 51.38,
-    "fps_gain_pct": 105.69,
+    "latency_speedup": 2.003,
+    "latency_reduction_pct": 50.06,
+    "fps_gain_pct": 100.25,
     "model_size_reduction_pct": 23.42
   }
 }
 ```
+
+FP vs INT8 detection comparison:
+
+```json
+{
+  "fp": {
+    "count": 3,
+    "by_class": {
+      "person": 1,
+      "surfboard": 1,
+      "bottle": 1
+    }
+  },
+  "i8": {
+    "count": 0,
+    "by_class": {}
+  },
+  "status": "mismatch"
+}
+```
+
+The current INT8 model is therefore a performance-positive but
+quality-failing optimization candidate. A direct output inspection showed that
+the INT8 model keeps nonzero box coordinates, but its 80 class-score channels
+are all zero after runtime output conversion. The next quantization task is to
+fix RKNN output dtype/quantization settings and rerun the FP vs INT8 detection
+comparison.
 
 The dynamic range warning printed by RKNN Runtime is expected for this static
 shape export:
@@ -294,6 +341,6 @@ torch: 2.2.0
 onnx: 1.16.1
 ```
 
-Next optimization step: add YOLO postprocessing on the board, compare decoded
-detections between FP and INT8 on the same frames, then move from single-image
-benchmarking to continuous camera inference.
+Next optimization step: fix INT8 output quality by adjusting RKNN conversion
+settings, then move from single-image benchmarking to continuous camera
+inference.

@@ -19,6 +19,90 @@ from pathlib import Path
 from typing import Any
 
 
+COCO80 = [
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
+]
+
+
 def module_status(name: str) -> dict[str, Any]:
     try:
         module = importlib.import_module(name)
@@ -59,6 +143,150 @@ def percentile(values: list[float], pct: float) -> float | None:
     return round(ordered[idx], 3)
 
 
+def box_iou(a: list[float], b: list[float]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def nms(detections: list[dict[str, Any]], iou_threshold: float) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    pending = sorted(detections, key=lambda item: item["confidence"], reverse=True)
+    while pending:
+        current = pending.pop(0)
+        kept.append(current)
+        pending = [
+            item
+            for item in pending
+            if item["class_id"] != current["class_id"]
+            or box_iou(item["bbox_xyxy"], current["bbox_xyxy"]) < iou_threshold
+        ]
+    return kept
+
+
+def summarize_yolo_output(outputs: list[Any]) -> dict[str, Any]:
+    import numpy as np
+
+    pred = np.asarray(outputs[0])
+    squeezed = np.squeeze(pred)
+    if squeezed.shape[0] != 84 and squeezed.shape[-1] == 84:
+        squeezed = squeezed.T
+    summary: dict[str, Any] = {
+        "shape": list(pred.shape),
+        "dtype": str(pred.dtype),
+        "min": round(float(pred.min()), 6),
+        "max": round(float(pred.max()), 6),
+    }
+    if squeezed.shape[0] == 84:
+        boxes = squeezed[:4, :]
+        scores = squeezed[4:, :]
+        summary["box"] = {
+            "min": round(float(boxes.min()), 6),
+            "max": round(float(boxes.max()), 6),
+            "nonzero": int(np.count_nonzero(boxes)),
+        }
+        summary["class_scores"] = {
+            "min": round(float(scores.min()), 6),
+            "max": round(float(scores.max()), 6),
+            "nonzero": int(np.count_nonzero(scores)),
+        }
+    return summary
+
+
+def decode_yolov8(
+    outputs: list[Any],
+    image_path: Path,
+    image_size: int,
+    conf_threshold: float,
+    iou_threshold: float,
+    max_detections: int,
+) -> tuple[dict[str, Any], Any]:
+    import cv2
+    import numpy as np
+
+    image_bgr = cv2.imread(str(image_path))
+    if image_bgr is None:
+        raise ValueError(f"could not decode image: {image_path}")
+    height, width = image_bgr.shape[:2]
+
+    pred = np.asarray(outputs[0])
+    pred = np.squeeze(pred)
+    if pred.shape[0] != 84 and pred.shape[-1] == 84:
+        pred = pred.T
+    if pred.shape[0] != 84:
+        raise ValueError(f"unexpected YOLO output shape: {list(np.asarray(outputs[0]).shape)}")
+
+    boxes = pred[:4, :].T.astype(float)
+    scores = pred[4:, :].T.astype(float)
+    class_ids = np.argmax(scores, axis=1)
+    confidences = scores[np.arange(scores.shape[0]), class_ids]
+
+    scale_x = width / float(image_size)
+    scale_y = height / float(image_size)
+    detections: list[dict[str, Any]] = []
+    for idx, (box, class_id, confidence) in enumerate(zip(boxes, class_ids, confidences)):
+        confidence = float(confidence)
+        if confidence < conf_threshold:
+            continue
+        cx, cy, bw, bh = [float(v) for v in box]
+        x1 = max(0.0, (cx - bw / 2.0) * scale_x)
+        y1 = max(0.0, (cy - bh / 2.0) * scale_y)
+        x2 = min(float(width), (cx + bw / 2.0) * scale_x)
+        y2 = min(float(height), (cy + bh / 2.0) * scale_y)
+        detections.append(
+            {
+                "id": idx,
+                "class_id": int(class_id),
+                "class_name": COCO80[int(class_id)] if int(class_id) < len(COCO80) else str(class_id),
+                "confidence": round(confidence, 4),
+                "bbox_xyxy": [round(v, 2) for v in [x1, y1, x2, y2]],
+                "bbox_xywh": [round(x1, 2), round(y1, 2), round(x2 - x1, 2), round(y2 - y1, 2)],
+            }
+        )
+
+    detections = nms(detections, iou_threshold)[:max_detections]
+    for idx, det in enumerate(detections):
+        det["id"] = idx
+
+    annotated = image_bgr.copy()
+    for det in detections:
+        x1, y1, x2, y2 = [int(round(v)) for v in det["bbox_xyxy"]]
+        label = f"{det['class_name']} {det['confidence']:.2f}"
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 220, 80), 2)
+        cv2.putText(
+            annotated,
+            label,
+            (x1, max(20, y1 - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 220, 80),
+            2,
+            cv2.LINE_AA,
+        )
+
+    payload = {
+        "source": str(image_path),
+        "image": {"width": width, "height": height},
+        "model": "rknn-yolov8n",
+        "device": "rk3576-rknn",
+        "postprocess": {
+            "type": "yolov8_raw_head",
+            "confidence_threshold": conf_threshold,
+            "iou_threshold": iou_threshold,
+            "max_detections": max_detections,
+        },
+        "detections": detections,
+    }
+    return payload, annotated
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, type=Path)
@@ -67,6 +295,11 @@ def main() -> int:
     parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--runs", type=int, default=30)
+    parser.add_argument("--detections", type=Path, default=None)
+    parser.add_argument("--annotated", type=Path, default=None)
+    parser.add_argument("--conf-thres", type=float, default=0.25)
+    parser.add_argument("--iou-thres", type=float, default=0.45)
+    parser.add_argument("--max-detections", type=int, default=100)
     parser.add_argument(
         "--fail-on-missing-runtime",
         action="store_true",
@@ -135,8 +368,9 @@ def main() -> int:
         rknn.release()
         return finish("init_runtime_failed", 6, rknn_ret=ret)
 
+    outputs = None
     for _ in range(args.warmup):
-        rknn.inference(inputs=[input_tensor])
+        outputs = rknn.inference(inputs=[input_tensor])
 
     latencies_ms: list[float] = []
     output_shapes: list[list[int]] = []
@@ -147,10 +381,32 @@ def main() -> int:
         if outputs and not output_shapes:
             output_shapes = [list(getattr(output, "shape", [])) for output in outputs]
 
+    detections_payload = None
+    if args.detections and args.image and outputs:
+        try:
+            detections_payload, annotated = decode_yolov8(
+                outputs,
+                args.image,
+                args.image_size,
+                args.conf_thres,
+                args.iou_thres,
+                args.max_detections,
+            )
+            args.detections.parent.mkdir(parents=True, exist_ok=True)
+            args.detections.write_text(json.dumps(detections_payload, indent=2), encoding="utf-8")
+            if args.annotated is not None:
+                import cv2
+
+                args.annotated.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(args.annotated), annotated)
+        except Exception as exc:
+            detections_payload = {"error": str(exc), "detections": []}
+
     rknn.release()
     total_ms = (time.perf_counter() - started) * 1000.0
     avg_ms = statistics.mean(latencies_ms) if latencies_ms else None
     fps = 1000.0 / avg_ms if avg_ms else None
+    output_summary = summarize_yolo_output(outputs) if outputs else None
 
     return finish(
         "ok",
@@ -168,6 +424,13 @@ def main() -> int:
         fps=round(fps, 3) if fps else None,
         total_elapsed_ms=round(total_ms, 3),
         output_shapes=output_shapes,
+        output_summary=output_summary,
+        detections={
+            "path": str(args.detections) if args.detections else None,
+            "annotated": str(args.annotated) if args.annotated else None,
+            "count": len(detections_payload.get("detections", [])) if detections_payload else None,
+            "error": detections_payload.get("error") if detections_payload else None,
+        },
     )
 
 

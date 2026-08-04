@@ -9,7 +9,7 @@ LDFLAGS ?=
 SOURCES := src/main.c src/pipeline.c src/camera_capture.c src/yuv.c
 OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 
-.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke setup-rknn-wsl export-onnx collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 compare-rknn-benchmarks
+.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke setup-rknn-wsl export-onnx collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 compare-rknn-benchmarks compare-rknn-detections
 
 all: $(TARGET)
 
@@ -77,6 +77,12 @@ compare-rknn-benchmarks:
 	  --fp runs/rk3576_board/yolov8n_rk3576_fp_rk3576_report.json \
 	  --i8 runs/rk3576_board/yolov8n_rk3576_i8_rk3576_report.json \
 	  --out runs/rk3576_board/fp_vs_i8_comparison.json
+
+compare-rknn-detections:
+	python3 scripts/compare_rknn_detections.py \
+	  --fp runs/rk3576_board/yolov8n_rk3576_fp_detections.json \
+	  --i8 runs/rk3576_board/yolov8n_rk3576_i8_detections.json \
+	  --out runs/rk3576_board/fp_vs_i8_detections.json
 
 clean:
 	rm -rf $(BUILD_DIR) out
