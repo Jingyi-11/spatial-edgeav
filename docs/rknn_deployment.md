@@ -161,6 +161,39 @@ are missing, it still records model size, board platform, available device
 nodes, and missing Python modules. Once RKNN Lite is installed on the board,
 the same command becomes a single-image NPU benchmark.
 
+Verified board-side FP baseline:
+
+```json
+{
+  "status": "ok",
+  "runtime": "rknn-toolkit-lite2 2.3.2",
+  "librknnrt": "2.3.2",
+  "driver": "0.9.7",
+  "model_size_bytes": 13396342,
+  "input_source": "image_rgb_resized",
+  "runs": 30,
+  "warmup": 3,
+  "latency_ms": {
+    "mean": 125.322,
+    "median": 127.799,
+    "p95": 147.408,
+    "min": 102.521,
+    "max": 148.351
+  },
+  "fps": 7.979,
+  "output_shapes": [[1, 84, 8400]]
+}
+```
+
+The dynamic range warning printed by RKNN Runtime is expected for this static
+shape export:
+
+```text
+query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type
+```
+
+It does not block inference.
+
 Target runtime path:
 
 ```text
@@ -188,15 +221,16 @@ CPU and memory usage
 
 The board is reachable over SSH as `rk3576`, runs Ubuntu 24.04 on aarch64, and
 has the Logitech C920 exposed as `/dev/video73`. The current user belongs to
-the `video` and `render` groups. Python-side runtime packages are not installed
-yet on the board:
+the `video` and `render` groups. Python-side runtime packages are installed and
+the FP RKNN model runs successfully:
 
 ```text
-rknnlite: missing
-numpy: missing
-cv2: missing
+rknn-toolkit-lite2: 2.3.2
+librknnrt: 2.3.2
+rknn driver: 0.9.7
+numpy: 1.26.4
+cv2: 4.6.0
 ```
 
-Run `make setup-rknn-board` from a local terminal, enter the `kickpi` sudo
-password when prompted, then rerun `make deploy-rknn-board` to collect real NPU
-latency.
+Next optimization step: convert an INT8 RKNN with camera calibration frames and
+compare latency, FPS, and output stability against the FP baseline.

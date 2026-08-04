@@ -245,6 +245,17 @@ or NPU benchmark report:
 make deploy-rknn-board
 ```
 
+Verified RK3576 FP baseline:
+
+```text
+Model: yolov8n_rk3576_fp.rknn
+Runtime: RKNN Toolkit Lite2 2.3.2, librknnrt 2.3.2, driver 0.9.7
+Input: RK3576 camera sample image, resized to 640x640 RGB
+Output tensor: [1, 84, 8400]
+Latency: mean 125.322 ms, median 127.799 ms, p95 147.408 ms over 30 runs
+FPS: 7.979
+```
+
 Verified outputs are generated locally under `runs/model_exports/yolov8n/`:
 
 ```text
