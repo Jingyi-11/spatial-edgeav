@@ -303,6 +303,12 @@ sudo journalctl -u spatial-edgeav-rknn.service -f
 cat /home/kickpi/spatial-edgeav/runs/service/heartbeat.json
 ```
 
+Collect a local service-health snapshot from the running board service:
+
+```bash
+make collect-rknn-service-snapshot
+```
+
 Build the generated CPU/NPU/remote benchmark matrix:
 
 ```bash
@@ -435,6 +441,7 @@ scripts/
   run_remote_yolo_pipeline.sh
   deploy_rknn_to_rk3576.sh
   deploy_rknn_service_to_rk3576.sh
+  collect_rknn_service_snapshot.sh
   rk3576_rknn_smoke_test.py
   rk3576_rknn_camera_loop.py
   rk3576_install_rknn_service.sh
