@@ -211,6 +211,38 @@ Record audio and video:
 ./scripts/09_rk3567_ffmpeg_record_nv12.sh /dev/videoX
 ```
 
+## RK3576 Model Deployment
+
+Install the RKNN conversion environment in WSL:
+
+```bash
+make setup-rknn-wsl
+```
+
+Export official YOLOv8n to ONNX on WSL:
+
+```bash
+make export-onnx
+```
+
+Convert ONNX to RKNN FP model for RK3576:
+
+```bash
+make convert-rknn-fp
+```
+
+Verified outputs are generated locally under `runs/model_exports/yolov8n/`:
+
+```text
+yolov8n.onnx
+onnx_export_report.json
+yolov8n_rk3576_fp.rknn
+yolov8n_rk3576_fp.report.json
+```
+
+See [docs/rknn_deployment.md](docs/rknn_deployment.md) for the Phase 3
+deployment and quantization plan.
+
 ## Repository Layout
 
 ```text
@@ -223,6 +255,7 @@ docs/
   macbook_remote_setup.md        # SSH/Tailscale remote development setup
   mvp_plan.md                    # roadmap from baseline to industrial MVP
   pipeline_walkthrough.md        # RK3567/RK3576 camera pipeline notes
+  rknn_deployment.md             # ONNX/RKNN conversion and benchmark plan
   windows_wsl_model_setup.md     # WSL model validation workflow
 include/
   camera_capture.h
@@ -235,6 +268,11 @@ scripts/
   rk3576_camera_tune.sh
   rk3576_stream_baseline.sh
   run_remote_yolo_pipeline.sh
+  wsl_setup_rknn_toolkit2.sh
+  wsl_export_yolov8_onnx.sh
+  wsl_convert_yolov8_rknn.sh
+  convert_yolov8_onnx_to_rknn.py
+  collect_rknn_calibration_frames.sh
   wsl_yolo_smoke_test.sh
   wsl_yolo_infer.py
   0*_rk3567_*.sh                 # board-side RK3567/RK3576 helpers

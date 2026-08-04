@@ -9,7 +9,7 @@ LDFLAGS ?=
 SOURCES := src/main.c src/pipeline.c src/camera_capture.c src/yuv.c
 OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 
-.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke
+.PHONY: all clean run-sim probe rk3567-sim edgeav-smoke setup-rknn-wsl export-onnx convert-rknn-fp
 
 all: $(TARGET)
 
@@ -36,6 +36,15 @@ probe: $(TARGET)
 
 edgeav-smoke:
 	bash scripts/run_remote_yolo_pipeline.sh
+
+setup-rknn-wsl:
+	bash scripts/wsl_setup_rknn_toolkit2.sh
+
+export-onnx:
+	bash scripts/wsl_export_yolov8_onnx.sh
+
+convert-rknn-fp:
+	bash scripts/wsl_convert_yolov8_rknn.sh /mnt/c/Users/HP/edgeav_data/exports/yolov8n/yolov8n.onnx fp rk3576
 
 clean:
 	rm -rf $(BUILD_DIR) out
