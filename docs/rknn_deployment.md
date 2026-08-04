@@ -505,6 +505,63 @@ The next step is to reduce duplicate boxes and move the remaining hot path into
 C++: candidate filtering, selected DFL, NMS, and JSON event emission should be
 implemented inside the RKNN runtime service rather than in Python.
 
+## Phase 3F: Same-Class Containment NMS
+
+Candidate filtering reduced postprocess latency, but the continuous camera
+output still contained nested boxes around the same large object. Plain NMS
+only suppresses boxes when IoU is high; a small box inside a large box can have
+low IoU even when it is clearly a duplicate. The postprocess now suppresses a
+same-class box when either:
+
+```text
+IoU >= 0.45
+or
+intersection / smaller_box_area >= 0.85
+```
+
+Verified 60-frame RK3576 camera run after containment NMS:
+
+```json
+{
+  "status": "ok",
+  "postprocess": {
+    "candidate_filter": "class_score_and_score_sum",
+    "iou_threshold": 0.45,
+    "containment_threshold": 0.85
+  },
+  "latency_ms": {
+    "capture_mean": 17.565,
+    "preprocess_mean": 4.141,
+    "inference_mean": 40.341,
+    "postprocess_mean": 3.446,
+    "end_to_end_mean": 65.496
+  },
+  "fps": {
+    "inference_only": 24.789,
+    "end_to_end": 15.268
+  },
+  "detections_by_class": {
+    "chair": 79,
+    "bottle": 14,
+    "surfboard": 36,
+    "umbrella": 8
+  }
+}
+```
+
+Measured improvement from the original full-map DFL baseline:
+
+```text
+postprocess latency: 33.843 ms -> 3.446 ms
+postprocess reduction: 89.8%
+end-to-end latency: 92.605 ms -> 65.496 ms
+end-to-end FPS: 10.798 -> 15.268
+```
+
+This is still a Python baseline, but it now has a realistic postprocess shape
+for the C++ service: threshold candidates early, decode only selected boxes,
+then suppress both high-IoU duplicates and contained same-class boxes.
+
 The dynamic range warning printed by RKNN Runtime is expected for this static
 shape export:
 

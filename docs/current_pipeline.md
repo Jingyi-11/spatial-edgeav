@@ -263,8 +263,9 @@ Postprocess optimization status:
 ```text
 Python YOLO postprocess
   -> class-score + score-sum candidate filtering before DFL
-  -> postprocess latency reduced from 33.843 ms to 4.153 ms
-  -> next: duplicate-box cleanup and C++ RKNN runtime service
+  -> same-class containment NMS for nested duplicate boxes
+  -> postprocess latency reduced from 33.843 ms to 3.446 ms
+  -> next: C++ RKNN runtime service
   -> JSONL event log
   -> spatial rule evaluation
 ```

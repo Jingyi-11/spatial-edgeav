@@ -16,6 +16,7 @@ from typing import Any
 
 from rk3576_rknn_smoke_test import (
     COCO80,
+    DEFAULT_NMS_CONTAINMENT_THRESHOLD,
     box_process_selected,
     flatten_hw_channels,
     group_rockchip_yolov8_outputs,
@@ -394,6 +395,7 @@ def main() -> int:
             "candidate_filter": "class_score_and_score_sum",
             "confidence_threshold": args.conf_thres,
             "iou_threshold": args.iou_thres,
+            "containment_threshold": DEFAULT_NMS_CONTAINMENT_THRESHOLD,
             "max_detections": args.max_detections,
         },
         latency_ms={

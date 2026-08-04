@@ -102,6 +102,8 @@ COCO80 = [
     "toothbrush",
 ]
 
+DEFAULT_NMS_CONTAINMENT_THRESHOLD = 0.85
+
 
 def module_status(name: str) -> dict[str, Any]:
     try:
@@ -156,7 +158,24 @@ def box_iou(a: list[float], b: list[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def nms(detections: list[dict[str, Any]], iou_threshold: float) -> list[dict[str, Any]]:
+def box_intersection_over_smaller_area(a: list[float], b: list[float]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    smaller = min(area_a, area_b)
+    return inter / smaller if smaller > 0 else 0.0
+
+
+def nms(
+    detections: list[dict[str, Any]],
+    iou_threshold: float,
+    containment_threshold: float = DEFAULT_NMS_CONTAINMENT_THRESHOLD,
+) -> list[dict[str, Any]]:
     kept: list[dict[str, Any]] = []
     pending = sorted(detections, key=lambda item: item["confidence"], reverse=True)
     while pending:
@@ -166,7 +185,11 @@ def nms(detections: list[dict[str, Any]], iou_threshold: float) -> list[dict[str
             item
             for item in pending
             if item["class_id"] != current["class_id"]
-            or box_iou(item["bbox_xyxy"], current["bbox_xyxy"]) < iou_threshold
+            or (
+                box_iou(item["bbox_xyxy"], current["bbox_xyxy"]) < iou_threshold
+                and box_intersection_over_smaller_area(item["bbox_xyxy"], current["bbox_xyxy"])
+                < containment_threshold
+            )
         ]
     return kept
 
@@ -405,6 +428,7 @@ def decode_rockchip_yolov8(
             "candidate_stats": candidate_stats,
             "confidence_threshold": conf_threshold,
             "iou_threshold": iou_threshold,
+            "containment_threshold": DEFAULT_NMS_CONTAINMENT_THRESHOLD,
             "max_detections": max_detections,
         },
         "detections": detections,
@@ -518,6 +542,7 @@ def decode_yolov8(
             "type": "yolov8_raw_head",
             "confidence_threshold": conf_threshold,
             "iou_threshold": iou_threshold,
+            "containment_threshold": DEFAULT_NMS_CONTAINMENT_THRESHOLD,
             "max_detections": max_detections,
         },
         "detections": detections,

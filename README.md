@@ -320,10 +320,11 @@ Verified continuous RK3576 camera RKNN baseline:
 Input: Logitech C920 on /dev/video73, 1280x720 MJPEG, 60 frames
 Model: Rockchip optimized YOLOv8n INT8 RKNN
 Postprocess: class-score + score-sum candidate filtering before DFL
-Inference: mean 41.586 ms, 24.046 FPS inference-only
-Postprocess: mean 4.153 ms, down from 33.843 ms before candidate filtering
-End-to-end: mean 70.016 ms, 14.282 FPS
-Detected classes across 60 frames: chair 162, surfboard 64, bottle 97
+NMS: same-class IoU plus containment suppression for duplicate boxes
+Inference: mean 40.341 ms, 24.789 FPS inference-only
+Postprocess: mean 3.446 ms, down from 33.843 ms before candidate filtering
+End-to-end: mean 65.496 ms, 15.268 FPS
+Detected classes across 60 frames: chair 79, surfboard 36, bottle 14, umbrella 8
 Artifacts: camera_report.json, camera_frames.json, camera_last.jpg
 ```
 
