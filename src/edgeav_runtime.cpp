@@ -6,6 +6,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <pthread.h>
+
 extern "C" {
 #include "camera_capture.h"
 #include "pipeline.h"
@@ -33,6 +35,7 @@ struct RuntimeConfig {
     PixelFormat pixel_format = PIXEL_FORMAT_YUYV;
     bool simulate = false;
     bool rknn_every_frame = false;
+    bool rknn_latest_frame = false;
 };
 
 struct RuntimeStats {
@@ -51,6 +54,7 @@ struct RuntimeStats {
     uint64_t rknn_frames = 0;
     uint64_t rknn_failures = 0;
     uint64_t detections_total = 0;
+    uint64_t skipped_frames = 0;
     double preprocess_ms_total = 0.0;
     double inference_ms_total = 0.0;
     double postprocess_ms_total = 0.0;
@@ -81,6 +85,35 @@ struct RuntimeContext {
     uint32_t frame_record_count = 0;
 };
 
+struct LatestFrameState {
+    const RuntimeConfig *config = nullptr;
+    RuntimeStats *stats = nullptr;
+    pthread_mutex_t mutex;
+    pthread_cond_t condition;
+    uint8_t *latest_frame = nullptr;
+    size_t latest_frame_size = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    PixelFormat pixel_format = PIXEL_FORMAT_UNKNOWN;
+    uint64_t latest_sequence = 0;
+    uint64_t published_frames = 0;
+    uint64_t consumed_sequence = UINT64_MAX;
+    bool has_frame = false;
+    bool done = false;
+};
+
+struct LatestWorkerArgs {
+    LatestFrameState *state = nullptr;
+    RknnDetector *detector = nullptr;
+    uint8_t *raw_frame = nullptr;
+    size_t raw_frame_size = 0;
+    uint8_t *rknn_input = nullptr;
+    size_t rknn_input_size = 0;
+    FrameRecord *frame_records = nullptr;
+    uint32_t frame_record_capacity = 0;
+    uint32_t *frame_record_count = nullptr;
+};
+
 void print_usage(const char *program)
 {
     printf("Usage:\n");
@@ -101,6 +134,7 @@ void print_usage(const char *program)
     printf("  --rknn-report PATH     RKNN tensor/inference JSON report path\n");
     printf("  --rknn-input-dump PATH Write resized RGB RKNN input as PPM when using live YUYV\n");
     printf("  --rknn-every-frame     Run RKNN on every captured YUYV frame\n");
+    printf("  --rknn-latest-frame    Decouple capture and RKNN with a latest-frame worker\n");
     printf("  --rknn-runs N          RKNN measured runs, default 10\n");
     printf("  --rknn-warmup N        RKNN warmup runs, default 3\n");
 }
@@ -161,6 +195,8 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
             config->rknn_input_dump_path = argv[++index];
         } else if (strcmp(argv[index], "--rknn-every-frame") == 0) {
             config->rknn_every_frame = true;
+        } else if (strcmp(argv[index], "--rknn-latest-frame") == 0) {
+            config->rknn_latest_frame = true;
         } else if (strcmp(argv[index], "--rknn-runs") == 0 && index + 1 < argc) {
             if (!parse_u32(argv[++index], &config->rknn_runs)) {
                 return false;
@@ -175,6 +211,9 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
         } else {
             return false;
         }
+    }
+    if (config->rknn_latest_frame) {
+        config->rknn_every_frame = true;
     }
     return true;
 }
@@ -234,10 +273,12 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
                 stats.rknn_input_ready ? "true" : "false",
                 stats.rknn_input_dumped ? "true" : "false");
     }
-    fprintf(file, "  \"rknn_continuous\": {\"enabled\": %s, \"frames\": %llu, \"failures\": %llu, \"detections_total\": %llu},\n",
+    fprintf(file, "  \"rknn_continuous\": {\"enabled\": %s, \"mode\": \"%s\", \"frames\": %llu, \"failures\": %llu, \"skipped_frames\": %llu, \"detections_total\": %llu},\n",
             config.rknn_every_frame ? "true" : "false",
+            config.rknn_latest_frame ? "latest_frame_worker" : "synchronous_callback",
             static_cast<unsigned long long>(stats.rknn_frames),
             static_cast<unsigned long long>(stats.rknn_failures),
+            static_cast<unsigned long long>(stats.skipped_frames),
             static_cast<unsigned long long>(stats.detections_total));
     fprintf(file, "  \"latency_ms\": {\"preprocess_mean\": %.3f, \"inference_mean\": %.3f, \"postprocess_mean\": %.3f, \"rknn_end_to_end_mean\": %.3f},\n",
             mean_or_zero(stats.preprocess_ms_total, stats.rknn_frames),
@@ -382,6 +423,174 @@ void on_frame(const VideoFrame *frame, void *userdata)
     write_json(context->config->heartbeat_path, *context->config, *stats, "running");
 }
 
+void record_capture_stats(RuntimeStats *stats, const VideoFrame *frame)
+{
+    if (stats->frames == 0) {
+        stats->first_timestamp_us = frame->timestamp_us;
+    }
+    stats->last_timestamp_us = frame->timestamp_us;
+    stats->last_sequence = frame->sequence;
+    stats->frames++;
+    stats->bytes += frame->size;
+}
+
+void on_latest_frame(const VideoFrame *frame, void *userdata)
+{
+    auto *state = static_cast<LatestFrameState *>(userdata);
+    pthread_mutex_lock(&state->mutex);
+    record_capture_stats(state->stats, frame);
+
+    if (frame->pixel_format != PIXEL_FORMAT_YUYV || frame->size > state->latest_frame_size) {
+        pthread_mutex_unlock(&state->mutex);
+        return;
+    }
+    memcpy(state->latest_frame, frame->data, frame->size);
+    state->width = frame->width;
+    state->height = frame->height;
+    state->pixel_format = frame->pixel_format;
+    state->latest_sequence = frame->sequence;
+    state->published_frames++;
+    state->has_frame = true;
+    pthread_cond_signal(&state->condition);
+    pthread_mutex_unlock(&state->mutex);
+}
+
+void store_frame_result(
+    FrameRecord *frame_records,
+    uint32_t frame_record_capacity,
+    uint32_t *frame_record_count,
+    uint64_t sequence,
+    double preprocess_ms,
+    double end_to_end_ms,
+    const RknnFrameResult &result)
+{
+    if (!frame_records || !frame_record_count || *frame_record_count >= frame_record_capacity) {
+        return;
+    }
+    FrameRecord &record = frame_records[(*frame_record_count)++];
+    record.sequence = sequence;
+    record.preprocess_ms = preprocess_ms;
+    record.inference_ms = result.inference_ms;
+    record.postprocess_ms = result.postprocess_ms;
+    record.end_to_end_ms = end_to_end_ms;
+    record.detections = result.detections_after_nms;
+    record.top_detection_count = result.detections_after_nms < 5 ? result.detections_after_nms : 5;
+    for (uint32_t index = 0; index < record.top_detection_count; ++index) {
+        record.top_detections[index] = result.detections[index];
+    }
+}
+
+void accumulate_rknn_stats(
+    RuntimeStats *stats,
+    double preprocess_ms,
+    double end_to_end_ms,
+    const RknnFrameResult &result)
+{
+    stats->rknn_attempted = true;
+    stats->rknn_result = result.status;
+    stats->rknn_frames++;
+    stats->detections_total += result.detections_after_nms;
+    stats->preprocess_ms_total += preprocess_ms;
+    stats->inference_ms_total += result.inference_ms;
+    stats->postprocess_ms_total += result.postprocess_ms;
+    stats->rknn_end_to_end_ms_total += end_to_end_ms;
+}
+
+void latest_frame_worker(
+    LatestFrameState *state,
+    RknnDetector *detector,
+    uint8_t *raw_frame,
+    size_t raw_frame_size,
+    uint8_t *rknn_input,
+    size_t rknn_input_size,
+    FrameRecord *frame_records,
+    uint32_t frame_record_capacity,
+    uint32_t *frame_record_count)
+{
+    while (true) {
+        uint64_t sequence = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        pthread_mutex_lock(&state->mutex);
+        while (!state->done && (!state->has_frame || state->latest_sequence == state->consumed_sequence)) {
+            pthread_cond_wait(&state->condition, &state->mutex);
+        }
+        if (state->done && (!state->has_frame || state->latest_sequence == state->consumed_sequence)) {
+            pthread_mutex_unlock(&state->mutex);
+            break;
+        }
+        size_t copy_size = state->latest_frame_size < raw_frame_size ? state->latest_frame_size : raw_frame_size;
+        memcpy(raw_frame, state->latest_frame, copy_size);
+        sequence = state->latest_sequence;
+        width = state->width;
+        height = state->height;
+        state->consumed_sequence = sequence;
+        pthread_mutex_unlock(&state->mutex);
+
+        uint64_t preprocess_start_us = monotonic_time_us();
+        int preprocess_result = yuyv_to_rgb_resized(raw_frame, raw_frame_size, width, height, rknn_input, 640, 640);
+        uint64_t preprocess_end_us = monotonic_time_us();
+        if (preprocess_result != 0) {
+            pthread_mutex_lock(&state->mutex);
+            state->stats->rknn_failures++;
+            snprintf(state->stats->error, sizeof(state->stats->error), "latest frame preprocess failed");
+            pthread_mutex_unlock(&state->mutex);
+            continue;
+        }
+        double preprocess_ms = elapsed_ms(preprocess_start_us, preprocess_end_us);
+
+        pthread_mutex_lock(&state->mutex);
+        state->stats->rknn_input_ready = true;
+        if (state->config->rknn_input_dump_path && !state->stats->rknn_input_dumped) {
+            state->stats->rknn_input_dumped = write_rgb_ppm(state->config->rknn_input_dump_path, rknn_input, 640, 640);
+        }
+        pthread_mutex_unlock(&state->mutex);
+
+        uint64_t end_to_end_start_us = preprocess_start_us;
+        RknnFrameResult frame_result;
+        int rknn_result = rknn_detector_run(detector, rknn_input, static_cast<uint32_t>(rknn_input_size), &frame_result);
+        uint64_t end_to_end_end_us = monotonic_time_us();
+        double end_to_end_ms = elapsed_ms(end_to_end_start_us, end_to_end_end_us);
+
+        pthread_mutex_lock(&state->mutex);
+        if (rknn_result != 0) {
+            state->stats->rknn_attempted = true;
+            state->stats->rknn_result = rknn_result;
+            state->stats->rknn_failures++;
+            snprintf(state->stats->error, sizeof(state->stats->error), "rknn_detector_run failed");
+            pthread_mutex_unlock(&state->mutex);
+            continue;
+        }
+        accumulate_rknn_stats(state->stats, preprocess_ms, end_to_end_ms, frame_result);
+        store_frame_result(
+            frame_records,
+            frame_record_capacity,
+            frame_record_count,
+            sequence,
+            preprocess_ms,
+            end_to_end_ms,
+            frame_result);
+        write_json(state->config->heartbeat_path, *state->config, *state->stats, "running");
+        pthread_mutex_unlock(&state->mutex);
+    }
+}
+
+void *latest_frame_worker_entry(void *userdata)
+{
+    auto *args = static_cast<LatestWorkerArgs *>(userdata);
+    latest_frame_worker(
+        args->state,
+        args->detector,
+        args->raw_frame,
+        args->raw_frame_size,
+        args->rknn_input,
+        args->rknn_input_size,
+        args->frame_records,
+        args->frame_record_capacity,
+        args->frame_record_count);
+    return nullptr;
+}
+
 size_t simulated_frame_size(const RuntimeConfig &config)
 {
     if (config.pixel_format == PIXEL_FORMAT_NV12) {
@@ -462,7 +671,14 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
         0,
     };
     uint8_t *rknn_input = nullptr;
+    uint8_t *latest_frame_buffer = nullptr;
+    uint8_t *worker_frame_buffer = nullptr;
     FrameRecord *frame_records = nullptr;
+    LatestFrameState latest_state;
+    LatestWorkerArgs worker_args;
+    pthread_t worker_thread;
+    bool latest_state_initialized = false;
+    bool worker_started = false;
     if (config.rknn_model_path && config.pixel_format == PIXEL_FORMAT_YUYV) {
         context.rknn_input_size = 640u * 640u * 3u;
         rknn_input = static_cast<uint8_t *>(calloc(context.rknn_input_size, 1));
@@ -494,16 +710,77 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
             }
             context.frame_records = frame_records;
             context.frame_record_capacity = config.frames;
+
+            if (config.rknn_latest_frame) {
+                size_t raw_frame_size = static_cast<size_t>(config.width) * config.height * 2u;
+                latest_frame_buffer = static_cast<uint8_t *>(calloc(raw_frame_size, 1));
+                worker_frame_buffer = static_cast<uint8_t *>(calloc(raw_frame_size, 1));
+                if (!latest_frame_buffer || !worker_frame_buffer) {
+                    snprintf(stats->error, sizeof(stats->error), "latest frame allocation failed");
+                    rknn_detector_destroy(context.detector);
+                    camera_close(camera);
+                    free(worker_frame_buffer);
+                    free(latest_frame_buffer);
+                    free(frame_records);
+                    free(rknn_input);
+                    return -1;
+                }
+                latest_state.config = &config;
+                latest_state.stats = stats;
+                pthread_mutex_init(&latest_state.mutex, nullptr);
+                pthread_cond_init(&latest_state.condition, nullptr);
+                latest_state_initialized = true;
+                latest_state.latest_frame = latest_frame_buffer;
+                latest_state.latest_frame_size = raw_frame_size;
+                worker_args.state = &latest_state;
+                worker_args.detector = context.detector;
+                worker_args.raw_frame = worker_frame_buffer;
+                worker_args.raw_frame_size = raw_frame_size;
+                worker_args.rknn_input = rknn_input;
+                worker_args.rknn_input_size = context.rknn_input_size;
+                worker_args.frame_records = frame_records;
+                worker_args.frame_record_capacity = config.frames;
+                worker_args.frame_record_count = &context.frame_record_count;
+                if (pthread_create(&worker_thread, nullptr, latest_frame_worker_entry, &worker_args) != 0) {
+                    snprintf(stats->error, sizeof(stats->error), "latest frame worker start failed");
+                    pthread_cond_destroy(&latest_state.condition);
+                    pthread_mutex_destroy(&latest_state.mutex);
+                    rknn_detector_destroy(context.detector);
+                    camera_close(camera);
+                    free(worker_frame_buffer);
+                    free(latest_frame_buffer);
+                    free(frame_records);
+                    free(rknn_input);
+                    return -1;
+                }
+                worker_started = true;
+            }
         }
     }
 
-    if (camera_start(camera) != 0 || camera_capture_frames(camera, on_frame, &context) != 0) {
+    FrameCallback callback = config.rknn_latest_frame ? on_latest_frame : on_frame;
+    void *callback_userdata = config.rknn_latest_frame ? static_cast<void *>(&latest_state) : static_cast<void *>(&context);
+    if (camera_start(camera) != 0 || camera_capture_frames(camera, callback, callback_userdata) != 0) {
         snprintf(stats->error, sizeof(stats->error), "camera capture failed");
         result = -1;
     }
 
     camera_stop(camera);
     camera_close(camera);
+
+    if (config.rknn_latest_frame) {
+        if (latest_state_initialized) {
+            pthread_mutex_lock(&latest_state.mutex);
+            latest_state.done = true;
+            pthread_cond_signal(&latest_state.condition);
+            pthread_mutex_unlock(&latest_state.mutex);
+        }
+        if (worker_started) {
+            pthread_join(worker_thread, nullptr);
+        }
+        stats->skipped_frames = stats->frames > stats->rknn_frames ? stats->frames - stats->rknn_frames : 0;
+        context.rknn_input_ready = stats->rknn_input_ready;
+    }
 
     stats->rknn_input_ready = context.rknn_input_ready;
 
@@ -542,7 +819,13 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
     }
 
     rknn_detector_destroy(context.detector);
+    if (latest_state_initialized) {
+        pthread_cond_destroy(&latest_state.condition);
+        pthread_mutex_destroy(&latest_state.mutex);
+    }
     free(frame_records);
+    free(worker_frame_buffer);
+    free(latest_frame_buffer);
     free(rknn_input);
     return result;
 }

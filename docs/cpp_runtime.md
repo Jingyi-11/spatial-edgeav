@@ -407,6 +407,69 @@ is CPU-based. The next optimization step is to split capture/inference into a
 producer-consumer loop and add MJPEG/GStreamer/RGA preprocessing so camera
 capture can run closer to the requested 30 FPS.
 
+## Phase 5I: Latest-Frame Producer-Consumer Runtime
+
+The runtime now has a second continuous mode:
+
+```text
+capture callback
+  -> copy raw YUYV into one latest-frame buffer
+  -> signal worker
+  -> immediately return buffer to V4L2
+
+inference worker
+  -> copy latest raw YUYV frame
+  -> resize/convert to RGB 640x640
+  -> RKNN inference
+  -> YOLOv8 postprocess
+  -> per-frame JSON + heartbeat
+```
+
+Run:
+
+```bash
+make deploy-cpp-runtime-board
+make run-cpp-latest-yuyv-board
+make annotate-cpp-latest-yuyv
+```
+
+The key flag is:
+
+```text
+--rknn-latest-frame
+```
+
+This flag enables `--rknn-every-frame` and changes the runtime shape from
+`synchronous_callback` to `latest_frame_worker`.
+
+Verified latest-frame YUYV result:
+
+```text
+frames processed: 30
+rknn frames: 30
+rknn failures: 0
+skipped frames: 0
+detections total: 68
+measured capture FPS: 9.973
+preprocess mean: 11.814 ms
+inference mean: 36.768 ms
+postprocess mean: 21.232 ms
+RKNN end-to-end mean: 71.375 ms
+first frame: chair 0.8345, bottle 0.3922
+last frame: chair 0.8276, bottle 0.4078
+artifacts:
+  runs/rk3576_cpp_runtime/edgeav_runtime_latest_yuyv_report.json
+  runs/rk3576_cpp_runtime/edgeav_runtime_latest_yuyv_frames.json
+  runs/rk3576_cpp_runtime/edgeav_runtime_latest_yuyv_input.ppm
+  runs/rk3576_cpp_runtime/edgeav_runtime_latest_yuyv_annotated.ppm
+```
+
+The latest-frame run did not skip frames because the current YUYV camera mode is
+already delivering about 10 FPS, and the worker can keep up with that rate. The
+benefit of this architecture becomes more important when capture moves to a
+higher-FPS MJPEG/GStreamer/RGA path: old frames can be dropped instead of
+building latency in a queue, keeping inference aligned with the newest scene.
+
 Before running the live C++ camera test again, stop the Python service that owns
 the camera device, then restart it after the test:
 

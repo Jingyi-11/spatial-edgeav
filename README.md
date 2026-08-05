@@ -220,6 +220,8 @@ make run-cpp-live-yuyv-board
 make annotate-cpp-live-yuyv
 make run-cpp-continuous-yuyv-board
 make annotate-cpp-continuous-yuyv
+make run-cpp-latest-yuyv-board
+make annotate-cpp-latest-yuyv
 ```
 
 This converts a captured YUYV frame into an RGB `640x640` RKNN input tensor and
@@ -243,6 +245,12 @@ The C/C++ runtime now also supports a continuous per-frame RKNN baseline with
 `rknn_frames=30`, `failures=0`, `detections_total=64`,
 `preprocess_mean=12.102 ms`, `inference_mean=37.717 ms`,
 `postprocess_mean=17.951 ms`, `rknn_end_to_end_mean=69.470 ms`.
+The `--rknn-latest-frame` producer-consumer mode decouples capture from
+inference by keeping only the newest frame for the worker. Verified latest-frame
+YUYV result: `frames=30`, `rknn_frames=30`, `skipped_frames=0`,
+`detections_total=68`, `preprocess_mean=11.814 ms`,
+`inference_mean=36.768 ms`, `postprocess_mean=21.232 ms`,
+`rknn_end_to_end_mean=71.375 ms`.
 
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
