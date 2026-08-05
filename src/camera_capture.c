@@ -216,7 +216,7 @@ int camera_capture_frames(CameraCapture *camera, FrameCallback callback, void *u
     }
 
 #ifdef __linux__
-    for (uint32_t captured = 0; captured < camera->config.frames; captured++) {
+    for (uint32_t captured = 0; camera->config.frames == 0 || captured < camera->config.frames; captured++) {
         fd_set descriptors;
         struct timeval timeout;
         FD_ZERO(&descriptors);
@@ -275,7 +275,7 @@ int camera_capture_frames(CameraCapture *camera, FrameCallback callback, void *u
         return -1;
     }
 
-    for (uint32_t captured = 0; captured < camera->config.frames; captured++) {
+    for (uint32_t captured = 0; camera->config.frames == 0 || captured < camera->config.frames; captured++) {
         fill_simulated_yuyv(data, &camera->config, camera->sequence);
         VideoFrame frame = {
             .data = data,

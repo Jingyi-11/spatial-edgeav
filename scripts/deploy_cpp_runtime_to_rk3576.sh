@@ -26,7 +26,7 @@ retry_command() {
 
 echo "Preparing RK3576 C/C++ runtime workspace..."
 retry_command ssh -o BatchMode=yes -o ConnectTimeout=8 "${BOARD_HOST}" \
-  "mkdir -p '${REMOTE_SRC_DIR}/src' '${REMOTE_SRC_DIR}/include' '${REMOTE_RUN_DIR}'"
+  "mkdir -p '${REMOTE_SRC_DIR}/src' '${REMOTE_SRC_DIR}/include' '${REMOTE_RUN_DIR}' '${REMOTE_ROOT}/configs'"
 
 echo "Copying C/C++ runtime sources..."
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
@@ -35,6 +35,7 @@ retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   src/edgeav_runtime.cpp \
   src/rknn_detector.cpp \
+  src/spatial_engine.cpp \
   src/jpeg_decode.cpp \
   src/camera_capture.c \
   src/pipeline.c \
@@ -46,9 +47,13 @@ retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   include/pipeline.h \
   include/rknn_api_compat.h \
   include/rknn_detector.h \
+  include/spatial_engine.h \
   include/jpeg_decode.h \
   include/yuv.h \
   "${BOARD_HOST}:${REMOTE_SRC_DIR}/include/"
+retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
+  configs/spatial_rules.json \
+  "${BOARD_HOST}:${REMOTE_ROOT}/configs/"
 
 echo "Building edgeav_runtime on RK3576..."
 retry_command ssh -o BatchMode=yes -o ConnectTimeout=8 "${BOARD_HOST}" \

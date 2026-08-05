@@ -8,9 +8,14 @@
 
 #include <pthread.h>
 
+#include <string>
+#include <vector>
+
 #ifdef EDGEAV_ENABLE_LIBJPEG
 #include "jpeg_decode.h"
 #endif
+
+#include "spatial_engine.h"
 
 extern "C" {
 #include "camera_capture.h"
@@ -21,6 +26,8 @@ extern "C" {
 
 namespace {
 
+constexpr uint32_t kFrameRecordMaxDetections = 20;
+
 struct RuntimeConfig {
     const char *device = "/dev/video0";
     const char *report_path = "out/edgeav_runtime_report.json";
@@ -29,11 +36,16 @@ struct RuntimeConfig {
     const char *rknn_library_path = "/usr/lib/librknnrt.so";
     const char *rknn_report_path = "out/edgeav_rknn_report.json";
     const char *rknn_input_dump_path = nullptr;
+    const char *original_frame_dump_path = nullptr;
     const char *frames_json_path = "out/edgeav_runtime_frames.json";
+    const char *spatial_rules_path = nullptr;
+    const char *observations_jsonl_path = nullptr;
+    const char *events_jsonl_path = nullptr;
     uint32_t width = 640;
     uint32_t height = 480;
     uint32_t fps = 30;
     uint32_t frames = 60;
+    uint32_t max_frame_records = 300;
     uint32_t rknn_runs = 10;
     uint32_t rknn_warmup = 3;
     PixelFormat pixel_format = PIXEL_FORMAT_YUYV;
@@ -56,10 +68,14 @@ struct RuntimeStats {
     bool rknn_attempted = false;
     int rknn_result = 0;
     bool rknn_input_dumped = false;
+    bool original_frame_dumped = false;
     uint64_t rknn_frames = 0;
     uint64_t rknn_failures = 0;
     uint64_t detections_total = 0;
     uint64_t skipped_frames = 0;
+    uint64_t spatial_observations = 0;
+    uint64_t spatial_events = 0;
+    uint64_t spatial_failures = 0;
     double preprocess_ms_total = 0.0;
     double preprocess_decode_ms_total = 0.0;
     double preprocess_resize_or_convert_ms_total = 0.0;
@@ -71,6 +87,7 @@ struct RuntimeStats {
 
 struct FrameRecord {
     uint64_t sequence = 0;
+    uint64_t ts_ms = 0;
     double preprocess_ms = 0.0;
     double preprocess_decode_ms = 0.0;
     double preprocess_resize_or_convert_ms = 0.0;
@@ -78,7 +95,7 @@ struct FrameRecord {
     double postprocess_ms = 0.0;
     double end_to_end_ms = 0.0;
     uint32_t detections = 0;
-    RknnDetection top_detections[5];
+    RknnDetection top_detections[kFrameRecordMaxDetections];
     uint32_t top_detection_count = 0;
 };
 
@@ -101,6 +118,9 @@ struct RuntimeContext {
     FrameRecord *frame_records = nullptr;
     uint32_t frame_record_capacity = 0;
     uint32_t frame_record_count = 0;
+    const SpatialConfig *spatial_config = nullptr;
+    SpatialTracker *spatial_tracker = nullptr;
+    SpatialEventSummary *spatial_summary = nullptr;
 };
 
 struct LatestFrameState {
@@ -119,6 +139,9 @@ struct LatestFrameState {
     uint64_t consumed_sequence = UINT64_MAX;
     bool has_frame = false;
     bool done = false;
+    const SpatialConfig *spatial_config = nullptr;
+    SpatialTracker *spatial_tracker = nullptr;
+    SpatialEventSummary *spatial_summary = nullptr;
 };
 
 struct LatestWorkerArgs {
@@ -143,16 +166,21 @@ void print_usage(const char *program)
     printf("  --height N             Capture height, default 480\n");
     printf("  --fps N                Capture FPS, default 30\n");
     printf("  --frames N             Frames to process, default 60\n");
+    printf("  --max-frame-records N  Max per-run frames kept in frames JSON, default 300\n");
     printf("  --format NAME          YUYV/NV12/MJPEG, default YUYV\n");
     printf("  --report PATH          JSON report path\n");
     printf("  --heartbeat PATH       JSON heartbeat path\n");
     printf("  --frames-json PATH     Per-frame detection/latency JSON path\n");
+    printf("  --spatial-rules PATH   Spatial zones/rules JSON config\n");
+    printf("  --observations-jsonl PATH  Runtime spatial observations JSONL path\n");
+    printf("  --events-jsonl PATH    Runtime spatial events JSONL path\n");
     printf("  --letterbox            Preserve camera aspect ratio and pad to 640x640\n");
     printf("  --simulate             Use synthetic frames instead of opening V4L2\n");
     printf("  --rknn-model PATH      Optional RKNN model smoke test\n");
     printf("  --rknn-lib PATH        RKNN runtime library, default /usr/lib/librknnrt.so\n");
     printf("  --rknn-report PATH     RKNN tensor/inference JSON report path\n");
     printf("  --rknn-input-dump PATH Write resized RGB RKNN input as PPM when using live YUYV\n");
+    printf("  --original-frame-dump PATH Write first original-size RGB camera frame as PPM\n");
     printf("  --rknn-every-frame     Run RKNN on every captured YUYV frame\n");
     printf("  --rknn-latest-frame    Decouple capture and RKNN with a latest-frame worker\n");
     printf("  --rknn-runs N          RKNN measured runs, default 10\n");
@@ -165,6 +193,18 @@ bool parse_u32(const char *text, uint32_t *value)
     errno = 0;
     unsigned long parsed = strtoul(text, &end, 10);
     if (errno || end == nullptr || *end != '\0' || parsed == 0 || parsed > UINT32_MAX) {
+        return false;
+    }
+    *value = static_cast<uint32_t>(parsed);
+    return true;
+}
+
+bool parse_u32_allow_zero(const char *text, uint32_t *value)
+{
+    char *end = nullptr;
+    errno = 0;
+    unsigned long parsed = strtoul(text, &end, 10);
+    if (errno || end == nullptr || *end != '\0' || parsed > UINT32_MAX) {
         return false;
     }
     *value = static_cast<uint32_t>(parsed);
@@ -189,7 +229,11 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
                 return false;
             }
         } else if (strcmp(argv[index], "--frames") == 0 && index + 1 < argc) {
-            if (!parse_u32(argv[++index], &config->frames)) {
+            if (!parse_u32_allow_zero(argv[++index], &config->frames)) {
+                return false;
+            }
+        } else if (strcmp(argv[index], "--max-frame-records") == 0 && index + 1 < argc) {
+            if (!parse_u32(argv[++index], &config->max_frame_records)) {
                 return false;
             }
         } else if (strcmp(argv[index], "--format") == 0 && index + 1 < argc) {
@@ -203,6 +247,12 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
             config->heartbeat_path = argv[++index];
         } else if (strcmp(argv[index], "--frames-json") == 0 && index + 1 < argc) {
             config->frames_json_path = argv[++index];
+        } else if (strcmp(argv[index], "--spatial-rules") == 0 && index + 1 < argc) {
+            config->spatial_rules_path = argv[++index];
+        } else if (strcmp(argv[index], "--observations-jsonl") == 0 && index + 1 < argc) {
+            config->observations_jsonl_path = argv[++index];
+        } else if (strcmp(argv[index], "--events-jsonl") == 0 && index + 1 < argc) {
+            config->events_jsonl_path = argv[++index];
         } else if (strcmp(argv[index], "--letterbox") == 0) {
             config->letterbox = true;
         } else if (strcmp(argv[index], "--simulate") == 0) {
@@ -215,6 +265,8 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
             config->rknn_report_path = argv[++index];
         } else if (strcmp(argv[index], "--rknn-input-dump") == 0 && index + 1 < argc) {
             config->rknn_input_dump_path = argv[++index];
+        } else if (strcmp(argv[index], "--original-frame-dump") == 0 && index + 1 < argc) {
+            config->original_frame_dump_path = argv[++index];
         } else if (strcmp(argv[index], "--rknn-every-frame") == 0) {
             config->rknn_every_frame = true;
         } else if (strcmp(argv[index], "--rknn-latest-frame") == 0) {
@@ -236,6 +288,11 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
     }
     if (config->rknn_latest_frame) {
         config->rknn_every_frame = true;
+    }
+    bool has_partial_spatial = config->spatial_rules_path || config->observations_jsonl_path || config->events_jsonl_path;
+    bool has_full_spatial = config->spatial_rules_path && config->observations_jsonl_path && config->events_jsonl_path;
+    if (has_partial_spatial && !has_full_spatial) {
+        return false;
     }
     return true;
 }
@@ -320,6 +377,67 @@ void map_model_bbox_to_original(const RuntimeConfig &config, const RknnDetection
     mapped[3] = clamp_double((static_cast<double>(det.bbox_xyxy[3]) - mapping.pad_y) / sy, 0.0, height_max);
 }
 
+bool spatial_enabled(const RuntimeConfig &config)
+{
+    return config.spatial_rules_path && config.observations_jsonl_path && config.events_jsonl_path;
+}
+
+std::vector<SpatialDetection> build_spatial_detections(const RuntimeConfig &config, const RknnFrameResult &result)
+{
+    std::vector<SpatialDetection> detections;
+    detections.reserve(result.detections_after_nms);
+    for (uint32_t index = 0; index < result.detections_after_nms && index < RKNN_DETECTOR_MAX_DETECTIONS; ++index) {
+        const RknnDetection &src = result.detections[index];
+        SpatialDetection det;
+        det.detection_id = src.id;
+        det.class_id = src.class_id;
+        det.confidence = src.confidence;
+        for (uint32_t coord = 0; coord < 4; ++coord) {
+            det.bbox_model_xyxy[coord] = src.bbox_xyxy[coord];
+        }
+        map_model_bbox_to_original(config, src, det.bbox_original_xyxy);
+        detections.push_back(det);
+    }
+    return detections;
+}
+
+void append_spatial_outputs(
+    const RuntimeConfig &config,
+    RuntimeStats *stats,
+    const SpatialConfig *spatial_config,
+    SpatialTracker *spatial_tracker,
+    SpatialEventSummary *spatial_summary,
+    uint64_t sequence,
+    double end_to_end_ms,
+    const RknnFrameResult &result)
+{
+    if (!spatial_enabled(config) || !spatial_config || !spatial_tracker || !spatial_summary) {
+        return;
+    }
+    std::vector<SpatialDetection> detections = build_spatial_detections(config, result);
+    std::string error;
+    uint64_t ts_ms = monotonic_time_us() / 1000u;
+    if (!spatial_append_frame_jsonl(
+            config.observations_jsonl_path,
+            config.events_jsonl_path,
+            *spatial_config,
+            spatial_tracker,
+            sequence,
+            ts_ms,
+            config.width,
+            config.height,
+            end_to_end_ms,
+            detections,
+            spatial_summary,
+            &error)) {
+        stats->spatial_failures++;
+        snprintf(stats->error, sizeof(stats->error), "%s", error.c_str());
+        return;
+    }
+    stats->spatial_observations = spatial_summary->observations;
+    stats->spatial_events = spatial_summary->events;
+}
+
 bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStats &stats, const char *status)
 {
     FILE *file = fopen(path, "w");
@@ -363,6 +481,13 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
                 stats.rknn_input_ready ? "true" : "false",
                 stats.rknn_input_dumped ? "true" : "false");
     }
+    if (config.original_frame_dump_path) {
+        fprintf(file, "  \"original_frame\": {\"dump_path\": \"%s\", \"dumped\": %s},\n",
+                config.original_frame_dump_path,
+                stats.original_frame_dumped ? "true" : "false");
+    } else {
+        fprintf(file, "  \"original_frame\": {\"dump_path\": null, \"dumped\": false},\n");
+    }
     fprintf(file, "  \"rknn_continuous\": {\"enabled\": %s, \"mode\": \"%s\", \"frames\": %llu, \"failures\": %llu, \"skipped_frames\": %llu, \"detections_total\": %llu},\n",
             config.rknn_every_frame ? "true" : "false",
             config.rknn_latest_frame ? "latest_frame_worker" : "synchronous_callback",
@@ -370,6 +495,17 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
             static_cast<unsigned long long>(stats.rknn_failures),
             static_cast<unsigned long long>(stats.skipped_frames),
             static_cast<unsigned long long>(stats.detections_total));
+    if (spatial_enabled(config)) {
+        fprintf(file, "  \"spatial\": {\"enabled\": true, \"rules\": \"%s\", \"observations_jsonl\": \"%s\", \"events_jsonl\": \"%s\", \"observations\": %llu, \"events\": %llu, \"failures\": %llu},\n",
+                config.spatial_rules_path,
+                config.observations_jsonl_path,
+                config.events_jsonl_path,
+                static_cast<unsigned long long>(stats.spatial_observations),
+                static_cast<unsigned long long>(stats.spatial_events),
+                static_cast<unsigned long long>(stats.spatial_failures));
+    } else {
+        fprintf(file, "  \"spatial\": {\"enabled\": false, \"observations\": 0, \"events\": 0, \"failures\": 0},\n");
+    }
     fprintf(file, "  \"latency_ms\": {\"preprocess_mean\": %.3f, \"inference_mean\": %.3f, \"postprocess_mean\": %.3f, \"rknn_end_to_end_mean\": %.3f},\n",
             mean_or_zero(stats.preprocess_ms_total, stats.rknn_frames),
             mean_or_zero(stats.inference_ms_total, stats.rknn_frames),
@@ -397,8 +533,9 @@ bool write_frames_json(const char *path, const RuntimeConfig &config, const Fram
     fprintf(file, "[\n");
     for (uint32_t index = 0; index < count; ++index) {
         const FrameRecord &record = records[index];
-        fprintf(file, "  {\"sequence\": %llu, \"latency_ms\": {\"preprocess\": %.3f, \"preprocess_decode\": %.3f, \"preprocess_resize_or_convert\": %.3f, \"inference\": %.3f, \"postprocess\": %.3f, \"end_to_end\": %.3f}, \"detections\": [",
+        fprintf(file, "  {\"sequence\": %llu, \"ts_ms\": %llu, \"latency_ms\": {\"preprocess\": %.3f, \"preprocess_decode\": %.3f, \"preprocess_resize_or_convert\": %.3f, \"inference\": %.3f, \"postprocess\": %.3f, \"end_to_end\": %.3f}, \"detections\": [",
                 static_cast<unsigned long long>(record.sequence),
+                static_cast<unsigned long long>(record.ts_ms),
                 record.preprocess_ms,
                 record.preprocess_decode_ms,
                 record.preprocess_resize_or_convert_ms,
@@ -409,10 +546,11 @@ bool write_frames_json(const char *path, const RuntimeConfig &config, const Fram
             const RknnDetection &det = record.top_detections[det_index];
             double original_bbox[4];
             map_model_bbox_to_original(config, det, original_bbox);
-            fprintf(file, "%s{\"id\": %d, \"class_id\": %d, \"confidence\": %.4f, \"bbox_xyxy\": [%.2f, %.2f, %.2f, %.2f], \"bbox_original_xyxy\": [%.2f, %.2f, %.2f, %.2f]}",
+            fprintf(file, "%s{\"id\": %d, \"class_id\": %d, \"class_name\": \"%s\", \"confidence\": %.4f, \"bbox_xyxy\": [%.2f, %.2f, %.2f, %.2f], \"bbox_original_xyxy\": [%.2f, %.2f, %.2f, %.2f]}",
                     det_index == 0 ? "" : ", ",
                     det.id,
                     det.class_id,
+                    spatial_class_name(det.class_id),
                     det.confidence,
                     det.bbox_xyxy[0],
                     det.bbox_xyxy[1],
@@ -444,6 +582,36 @@ bool write_rgb_ppm(const char *path, const uint8_t *rgb, uint32_t width, uint32_
     size_t bytes = static_cast<size_t>(width) * height * 3u;
     bool ok = fwrite(rgb, 1, bytes, file) == bytes;
     fclose(file);
+    return ok;
+}
+
+bool dump_original_frame_ppm(
+    const char *path,
+    const uint8_t *data,
+    size_t size,
+    uint32_t width,
+    uint32_t height,
+    PixelFormat pixel_format)
+{
+    if (!path || !data || size == 0 || width == 0 || height == 0) {
+        return false;
+    }
+    size_t rgb_size = static_cast<size_t>(width) * height * 3u;
+    uint8_t *rgb = static_cast<uint8_t *>(calloc(rgb_size, 1));
+    if (!rgb) {
+        return false;
+    }
+    int result = -1;
+    if (pixel_format == PIXEL_FORMAT_YUYV) {
+        result = yuyv_to_rgb_resized(data, size, width, height, rgb, width, height);
+    }
+#ifdef EDGEAV_ENABLE_LIBJPEG
+    if (pixel_format == PIXEL_FORMAT_MJPEG) {
+        result = mjpeg_to_rgb_resized(data, size, rgb, width, height, 0, nullptr);
+    }
+#endif
+    bool ok = result == 0 && write_rgb_ppm(path, rgb, width, height);
+    free(rgb);
     return ok;
 }
 
@@ -527,6 +695,16 @@ void on_frame(const VideoFrame *frame, void *userdata)
     stats->frames++;
     stats->bytes += frame->size;
 
+    if (context->config->original_frame_dump_path && !stats->original_frame_dumped) {
+        stats->original_frame_dumped = dump_original_frame_ppm(
+            context->config->original_frame_dump_path,
+            frame->data,
+            frame->size,
+            frame->width,
+            frame->height,
+            frame->pixel_format);
+    }
+
     if (context->config->rknn_model_path && context->rknn_input && pixel_format_supported_for_rknn(frame->pixel_format)) {
         uint64_t preprocess_start_us = monotonic_time_us();
         double decode_ms = 0.0;
@@ -580,6 +758,7 @@ void on_frame(const VideoFrame *frame, void *userdata)
                     if (context->frame_records && context->frame_record_count < context->frame_record_capacity) {
                         FrameRecord &record = context->frame_records[context->frame_record_count++];
                         record.sequence = frame->sequence;
+                        record.ts_ms = monotonic_time_us() / 1000u;
                         record.preprocess_ms = preprocess_ms;
                         record.preprocess_decode_ms = decode_ms;
                         record.preprocess_resize_or_convert_ms = resize_or_convert_ms;
@@ -587,11 +766,20 @@ void on_frame(const VideoFrame *frame, void *userdata)
                         record.postprocess_ms = result.postprocess_ms;
                         record.end_to_end_ms = end_to_end_ms;
                         record.detections = result.detections_after_nms;
-                        record.top_detection_count = result.detections_after_nms < 5 ? result.detections_after_nms : 5;
+                        record.top_detection_count = result.detections_after_nms < kFrameRecordMaxDetections ? result.detections_after_nms : kFrameRecordMaxDetections;
                         for (uint32_t index = 0; index < record.top_detection_count; ++index) {
                             record.top_detections[index] = result.detections[index];
                         }
                     }
+                    append_spatial_outputs(
+                        *context->config,
+                        stats,
+                        context->spatial_config,
+                        context->spatial_tracker,
+                        context->spatial_summary,
+                        frame->sequence,
+                        end_to_end_ms,
+                        result);
                 }
             }
         }
@@ -649,6 +837,7 @@ void store_frame_result(
     }
     FrameRecord &record = frame_records[(*frame_record_count)++];
     record.sequence = sequence;
+    record.ts_ms = monotonic_time_us() / 1000u;
     record.preprocess_ms = preprocess_ms;
     record.preprocess_decode_ms = decode_ms;
     record.preprocess_resize_or_convert_ms = resize_or_convert_ms;
@@ -656,7 +845,7 @@ void store_frame_result(
     record.postprocess_ms = result.postprocess_ms;
     record.end_to_end_ms = end_to_end_ms;
     record.detections = result.detections_after_nms;
-    record.top_detection_count = result.detections_after_nms < 5 ? result.detections_after_nms : 5;
+    record.top_detection_count = result.detections_after_nms < kFrameRecordMaxDetections ? result.detections_after_nms : kFrameRecordMaxDetections;
     for (uint32_t index = 0; index < record.top_detection_count; ++index) {
         record.top_detections[index] = result.detections[index];
     }
@@ -742,6 +931,15 @@ void latest_frame_worker(
 
         pthread_mutex_lock(&state->mutex);
         state->stats->rknn_input_ready = true;
+        if (state->config->original_frame_dump_path && !state->stats->original_frame_dumped) {
+            state->stats->original_frame_dumped = dump_original_frame_ppm(
+                state->config->original_frame_dump_path,
+                raw_frame,
+                frame_bytes,
+                width,
+                height,
+                pixel_format);
+        }
         if (state->config->rknn_input_dump_path && !state->stats->rknn_input_dumped) {
             state->stats->rknn_input_dumped = write_rgb_ppm(state->config->rknn_input_dump_path, rknn_input, 640, 640);
         }
@@ -771,6 +969,15 @@ void latest_frame_worker(
             preprocess_ms,
             decode_ms,
             resize_or_convert_ms,
+            end_to_end_ms,
+            frame_result);
+        append_spatial_outputs(
+            *state->config,
+            state->stats,
+            state->spatial_config,
+            state->spatial_tracker,
+            state->spatial_summary,
+            sequence,
             end_to_end_ms,
             frame_result);
         write_json(state->config->heartbeat_path, *state->config, *state->stats, "running");
@@ -845,6 +1052,19 @@ int run_simulated(const RuntimeConfig &config, RuntimeStats *stats)
 
 int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
 {
+    SpatialConfig spatial_config;
+    SpatialTracker spatial_tracker;
+    SpatialEventSummary spatial_summary;
+    if (spatial_enabled(config)) {
+        std::string error;
+        if (!spatial_load_config(config.spatial_rules_path, &spatial_config, &error)) {
+            snprintf(stats->error, sizeof(stats->error), "%s", error.c_str());
+            return -1;
+        }
+        unlink(config.observations_jsonl_path);
+        unlink(config.events_jsonl_path);
+    }
+
     PipelineConfig pipeline_config = {
         config.device,
         nullptr,
@@ -873,6 +1093,11 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
         0,
         0,
     };
+    if (spatial_enabled(config)) {
+        context.spatial_config = &spatial_config;
+        context.spatial_tracker = &spatial_tracker;
+        context.spatial_summary = &spatial_summary;
+    }
     uint8_t *rknn_input = nullptr;
     uint8_t *latest_frame_buffer = nullptr;
     uint8_t *worker_frame_buffer = nullptr;
@@ -903,7 +1128,8 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
                 free(rknn_input);
                 return detector_result;
             }
-            frame_records = static_cast<FrameRecord *>(calloc(config.frames, sizeof(FrameRecord)));
+            uint32_t frame_record_capacity = config.frames > 0 ? config.frames : config.max_frame_records;
+            frame_records = static_cast<FrameRecord *>(calloc(frame_record_capacity, sizeof(FrameRecord)));
             if (!frame_records) {
                 snprintf(stats->error, sizeof(stats->error), "frame records allocation failed");
                 rknn_detector_destroy(context.detector);
@@ -912,7 +1138,7 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
                 return -1;
             }
             context.frame_records = frame_records;
-            context.frame_record_capacity = config.frames;
+            context.frame_record_capacity = frame_record_capacity;
 
             if (config.rknn_latest_frame) {
                 size_t raw_frame_size = static_cast<size_t>(config.width) * config.height * 2u;
@@ -934,6 +1160,11 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
                 }
                 latest_state.config = &config;
                 latest_state.stats = stats;
+                if (spatial_enabled(config)) {
+                    latest_state.spatial_config = &spatial_config;
+                    latest_state.spatial_tracker = &spatial_tracker;
+                    latest_state.spatial_summary = &spatial_summary;
+                }
                 pthread_mutex_init(&latest_state.mutex, nullptr);
                 pthread_cond_init(&latest_state.condition, nullptr);
                 latest_state_initialized = true;
@@ -946,7 +1177,7 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
                 worker_args.rknn_input = rknn_input;
                 worker_args.rknn_input_size = context.rknn_input_size;
                 worker_args.frame_records = frame_records;
-                worker_args.frame_record_capacity = config.frames;
+                worker_args.frame_record_capacity = context.frame_record_capacity;
                 worker_args.frame_record_count = &context.frame_record_count;
                 if (pthread_create(&worker_thread, nullptr, latest_frame_worker_entry, &worker_args) != 0) {
                     snprintf(stats->error, sizeof(stats->error), "latest frame worker start failed");

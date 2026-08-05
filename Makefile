@@ -15,7 +15,7 @@ JPEG ?= 0
 SOURCES := src/main.c src/pipeline.c src/camera_capture.c src/yuv.c
 OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 RUNTIME_C_OBJECTS := $(BUILD_DIR)/pipeline.o $(BUILD_DIR)/camera_capture.o $(BUILD_DIR)/yuv.o
-RUNTIME_CPP_OBJECTS := $(BUILD_DIR)/edgeav_runtime.o $(BUILD_DIR)/rknn_detector.o
+RUNTIME_CPP_OBJECTS := $(BUILD_DIR)/edgeav_runtime.o $(BUILD_DIR)/rknn_detector.o $(BUILD_DIR)/spatial_engine.o
 
 ifeq ($(JPEG),1)
 CXXFLAGS += -DEDGEAV_ENABLE_LIBJPEG
@@ -23,7 +23,7 @@ RUNTIME_CPP_OBJECTS += $(BUILD_DIR)/jpeg_decode.o
 LDFLAGS += -ljpeg
 endif
 
-.PHONY: all clean run-sim probe rk3567-sim edgeav-runtime run-edgeav-runtime-sim deploy-cpp-runtime-board probe-media-accel-board run-cpp-capture-yuyv-board run-cpp-capture-mjpeg-board run-cpp-live-yuyv-board run-cpp-continuous-yuyv-board run-cpp-latest-yuyv-board run-cpp-latest-mjpeg-board run-cpp-latest-mjpeg-letterbox-board annotate-cpp-live-yuyv annotate-cpp-continuous-yuyv annotate-cpp-latest-yuyv annotate-cpp-latest-mjpeg annotate-cpp-latest-mjpeg-letterbox edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board deploy-onnx-cpu-board deploy-rknn-service-board install-rknn-health-timer-board collect-rknn-service-snapshot profile-rknn-service check-rknn-service-health run-rknn-camera-board evaluate-rknn-camera-events benchmark-matrix compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
+.PHONY: all clean run-sim probe rk3567-sim edgeav-runtime run-edgeav-runtime-sim deploy-cpp-runtime-board deploy-cpp-runtime-service-board probe-media-accel-board run-cpp-capture-yuyv-board run-cpp-capture-mjpeg-board run-cpp-live-yuyv-board run-cpp-continuous-yuyv-board run-cpp-latest-yuyv-board run-cpp-latest-mjpeg-board run-cpp-latest-mjpeg-letterbox-board run-cpp-latest-mjpeg-letterbox-spatial-board annotate-cpp-live-yuyv annotate-cpp-continuous-yuyv annotate-cpp-latest-yuyv annotate-cpp-latest-mjpeg annotate-cpp-latest-mjpeg-letterbox annotate-cpp-latest-mjpeg-letterbox-original edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board deploy-onnx-cpu-board deploy-rknn-service-board install-rknn-health-timer-board collect-rknn-service-snapshot profile-rknn-service check-rknn-service-health run-rknn-camera-board evaluate-rknn-camera-events benchmark-matrix compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
 
 all: $(TARGET)
 
@@ -52,6 +52,9 @@ run-edgeav-runtime-sim: $(EDGEAV_RUNTIME_TARGET) out
 
 deploy-cpp-runtime-board:
 	bash scripts/deploy_cpp_runtime_to_rk3576.sh
+
+deploy-cpp-runtime-service-board:
+	bash scripts/deploy_cpp_runtime_service_to_rk3576.sh
 
 probe-media-accel-board:
 	bash scripts/rk3576_probe_media_accel.sh
@@ -108,6 +111,17 @@ run-cpp-latest-mjpeg-letterbox-board:
 	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_frames.json runs/rk3576_cpp_runtime/
 	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_input.ppm runs/rk3576_cpp_runtime/
 
+run-cpp-latest-mjpeg-letterbox-spatial-board:
+	mkdir -p runs/rk3576_cpp_runtime
+	ssh rk3576 "cd /home/kickpi/spatial-edgeav/cpp_runtime_src && ./build/edgeav_runtime --device /dev/video73 --width 1280 --height 720 --fps 30 --frames 30 --format MJPEG --letterbox --report /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_spatial_report.json --heartbeat /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_spatial_heartbeat.json --frames-json /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_spatial_frames.json --spatial-rules /home/kickpi/spatial-edgeav/configs/spatial_rules.json --observations-jsonl /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_observations.jsonl --events-jsonl /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_events.jsonl --rknn-model /home/kickpi/spatial-edgeav/models/yolov8n/yolov8n_rockchip_rk3576_i8.rknn --rknn-input-dump /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_spatial_input.ppm --original-frame-dump /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_original.ppm --rknn-latest-frame"
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_spatial_report.json runs/rk3576_cpp_runtime/
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_spatial_heartbeat.json runs/rk3576_cpp_runtime/
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_spatial_frames.json runs/rk3576_cpp_runtime/
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_observations.jsonl runs/rk3576_cpp_runtime/
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_events.jsonl runs/rk3576_cpp_runtime/
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_spatial_input.ppm runs/rk3576_cpp_runtime/
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_original.ppm runs/rk3576_cpp_runtime/
+
 annotate-cpp-live-yuyv:
 	python3 scripts/annotate_rknn_detections.py --image runs/rk3576_cpp_runtime/edgeav_runtime_live_yuyv_input.ppm --report runs/rk3576_cpp_runtime/edgeav_runtime_live_yuyv_rknn_report.json --output runs/rk3576_cpp_runtime/edgeav_runtime_live_yuyv_annotated.ppm
 
@@ -122,6 +136,9 @@ annotate-cpp-latest-mjpeg:
 
 annotate-cpp-latest-mjpeg-letterbox:
 	python3 scripts/annotate_rknn_detections.py --image runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_input.ppm --report runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_frames.json --output runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_annotated.ppm
+
+annotate-cpp-latest-mjpeg-letterbox-original:
+	python3 scripts/annotate_rknn_detections.py --image runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_original.ppm --report runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_spatial_frames.json --bbox-key bbox_original_xyxy --output runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_original_annotated.ppm
 
 run-sim: $(TARGET) out
 	$(TARGET) capture --frames 30 --output out/simulated.yuv --preview out/preview.ppm

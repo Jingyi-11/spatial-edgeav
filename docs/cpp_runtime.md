@@ -868,3 +868,155 @@ sudo systemctl stop spatial-edgeav-rknn.service
 make run-cpp-latest-mjpeg-board
 sudo systemctl start spatial-edgeav-rknn.service
 ```
+
+## Phase 5Q: C++ Spatial Event Engine
+
+The spatial layer has moved from Python-only post-processing into the C/C++
+runtime hot path. The runtime now accepts:
+
+```bash
+--spatial-rules /home/kickpi/spatial-edgeav/configs/spatial_rules.json
+--observations-jsonl /home/kickpi/spatial-edgeav/runs/cpp_runtime/observations.jsonl
+--events-jsonl /home/kickpi/spatial-edgeav/runs/cpp_runtime/events.jsonl
+```
+
+Current C++ spatial support:
+
+- Parses the project `spatial_rules.json` schema without a large JSON
+  dependency.
+- Supports `zone_intersection` rules from the current config.
+- Supports `zone_dwell`/`dwell_zone` style rules with `dwell_ms` and
+  `cooldown_ms` fields for future time-based policies.
+- Converts YOLO class ids to COCO class names in C++.
+- Uses `bbox_original_xyxy`, not the 640x640 model coordinates, for zone
+  intersection.
+- Maintains a lightweight IoU tracker so observations/events can contain a
+  stable `object_id` across nearby frames.
+
+The new board target is:
+
+```bash
+make run-cpp-latest-mjpeg-letterbox-spatial-board
+```
+
+Latest verified RK3576/C920 result:
+
+```json
+{
+  "measured_fps": 30.213,
+  "rknn_continuous": {
+    "mode": "latest_frame_worker",
+    "frames": 19,
+    "skipped_frames": 11,
+    "detections_total": 66
+  },
+  "spatial": {
+    "observations": 19,
+    "events": 1,
+    "failures": 0
+  },
+  "latency_ms": {
+    "preprocess_mean": 12.635,
+    "inference_mean": 36.684,
+    "postprocess_mean": 1.439,
+    "rknn_end_to_end_mean": 54.216
+  }
+}
+```
+
+Generated spatial artifacts:
+
+```text
+runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_observations.jsonl
+runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_events.jsonl
+```
+
+Example event:
+
+```json
+{
+  "type": "spatial_rule_triggered",
+  "rule_id": "chair_in_left_work_area",
+  "relation": "intersects",
+  "object": {
+    "object_id": 1,
+    "class_name": "chair",
+    "confidence": 0.4533,
+    "bbox_original_xyxy": [130.86, 480.94, 424.29, 715.27]
+  }
+}
+```
+
+The `chair_in_left_work_area` rule threshold is now `0.3` so the current desk
+scene reliably triggers a demonstrable MVP event. This is a product/demo
+configuration choice, not a model change.
+
+## Phase 5R: Original-Frame Visualization
+
+The runtime can now dump the first original-size RGB frame:
+
+```bash
+--original-frame-dump /home/kickpi/spatial-edgeav/runs/cpp_runtime/original.ppm
+```
+
+For the C920 MJPEG path this decodes the first 1280x720 JPEG frame into RGB PPM
+without letterbox padding. The normal RKNN input dump is still 640x640 and is
+used for model-input debugging.
+
+The original-frame annotation target is:
+
+```bash
+make annotate-cpp-latest-mjpeg-letterbox-original
+```
+
+It draws detections using:
+
+```bash
+--bbox-key bbox_original_xyxy
+```
+
+Verified artifacts:
+
+```text
+runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_original.ppm
+runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_letterbox_original_annotated.ppm
+```
+
+Why this matters:
+
+- Spatial rules and visualization now use the same original camera coordinate
+  system.
+- Letterbox padding no longer makes overlays look shifted or stretched.
+- The runtime has a complete evidence chain: camera frame, detections,
+  observations, events, report, and heartbeat.
+
+## Phase 5S: C++ Service Unit
+
+The project now includes a separate C++ service unit:
+
+```text
+systemd/spatial-edgeav-cpp.service
+configs/spatial-edgeav-cpp.env
+scripts/deploy_cpp_runtime_service_to_rk3576.sh
+```
+
+Install target:
+
+```bash
+make deploy-cpp-runtime-service-board
+```
+
+The unit runs the C++ MJPEG + letterbox + latest-frame + RKNN + spatial path
+with `--frames 0`, which now means continuous capture. To keep JSON memory and
+disk usage bounded, the runtime also supports:
+
+```bash
+--max-frame-records 300
+```
+
+The service was staged, but installing it into `/etc/systemd/system` requires
+the board's interactive `sudo` password. The script uses `ssh -tt`; run the
+target from a terminal where the password prompt can be answered. The C++
+service is intentionally separate from the existing Python
+`spatial-edgeav-rknn.service` so the two services do not silently fight over
+`/dev/video73`.

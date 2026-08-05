@@ -328,3 +328,66 @@ board-local timer health checks
 The remaining Phase 4 work is to add a stricter log retention policy and
 eventually migrate the hot capture / preprocess / RKNN / postprocess path from
 Python into C/C++.
+
+## C++ Runtime Service
+
+The project now has a separate C++ service unit for the optimized runtime path:
+
+```text
+systemd/spatial-edgeav-cpp.service
+configs/spatial-edgeav-cpp.env
+scripts/deploy_cpp_runtime_service_to_rk3576.sh
+```
+
+It runs:
+
+```text
+V4L2 USB camera MJPEG
+  -> libjpeg decode
+  -> letterbox to YOLO 640x640
+  -> RKNN/NPU inference
+  -> C++ YOLO postprocess
+  -> original-frame bbox mapping
+  -> C++ spatial rules
+  -> heartbeat/report/observations/events
+```
+
+Install target:
+
+```bash
+make deploy-cpp-runtime-service-board
+```
+
+By default the deploy script installs the unit and env file but does not enable
+or start the service. To enable or start explicitly:
+
+```bash
+ENABLE_SERVICE=1 make deploy-cpp-runtime-service-board
+START_SERVICE=1 make deploy-cpp-runtime-service-board
+```
+
+Only one camera service should own `/dev/video73` at a time. Stop the Python
+service before starting the C++ service:
+
+```bash
+sudo systemctl stop spatial-edgeav-rknn.service
+sudo systemctl start spatial-edgeav-cpp.service
+```
+
+Inspect:
+
+```bash
+sudo systemctl status spatial-edgeav-cpp.service
+sudo journalctl -u spatial-edgeav-cpp.service -f
+cat /home/kickpi/spatial-edgeav/runs/cpp_service/heartbeat.json
+cat /home/kickpi/spatial-edgeav/runs/cpp_service/events.jsonl
+```
+
+`--frames 0` now means continuous capture in the C/C++ runtime. The service
+uses `--max-frame-records 300` so the retained per-frame JSON stays bounded
+while heartbeat/report counters continue to update.
+
+Installation writes into `/etc/spatial-edgeav` and `/etc/systemd/system`, so
+the board prompts for the `kickpi` sudo password. The script uses `ssh -tt`,
+which works from a normal terminal but cannot be completed by non-interactive
+automation without passwordless sudo or an askpass setup.

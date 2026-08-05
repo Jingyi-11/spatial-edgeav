@@ -45,9 +45,20 @@
       "type": "zone_intersection",
       "class_name": "chair",
       "zone_id": "left_work_area",
-      "min_confidence": 0.5,
+      "min_confidence": 0.3,
       "severity": "info",
       "message": "Chair-like object detected inside the left work area."
+    },
+    {
+      "id": "chair_dwells_in_left_work_area",
+      "type": "zone_dwell",
+      "class_name": "chair",
+      "zone_id": "left_work_area",
+      "min_confidence": 0.3,
+      "dwell_ms": 300,
+      "cooldown_ms": 1200,
+      "severity": "info",
+      "message": "Chair-like object stayed inside the left work area."
     },
     {
       "id": "bottle_in_left_work_area",

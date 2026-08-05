@@ -297,6 +297,16 @@ probe-media-accel-board` verifies GStreamer 1.24.2, `gstreamer-app-1.0`, RGA
 frames. This is now the measured baseline before replacing CPU resize/decode
 with a GStreamer appsink or RGA-backed preprocessing path.
 
+The C/C++ runtime now also owns the spatial-event path. `make
+run-cpp-latest-mjpeg-letterbox-spatial-board` runs USB camera capture, MJPEG
+decode, letterbox preprocessing, RKNN/NPU inference, YOLO postprocess,
+original-frame bbox mapping, simple IoU tracking, and spatial rule evaluation
+inside the board-side runtime. Latest verified result: `measured_fps=30.213`,
+`rknn_frames=19/30`, `spatial.observations=19`, `spatial.events=1`,
+`spatial.failures=0`, `rknn_end_to_end_mean=54.216 ms`, and original-frame PPM
+dump enabled. `make annotate-cpp-latest-mjpeg-letterbox-original` draws
+`bbox_original_xyxy` detections on the 1280x720 original-frame snapshot.
+
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
 ## RK3567/RK3576 Media Scripts

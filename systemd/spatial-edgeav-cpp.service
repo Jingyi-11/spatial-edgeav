@@ -1,0 +1,41 @@
+[Unit]
+Description=Spatial EdgeAV C/C++ RK3576 camera service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kickpi
+Group=kickpi
+SupplementaryGroups=video render
+WorkingDirectory=/home/kickpi/spatial-edgeav/cpp_runtime_src
+EnvironmentFile=/etc/spatial-edgeav/cpp.env
+ExecStartPre=/usr/bin/mkdir -p ${EDGEAV_ROOT}/runs/cpp_service
+ExecStart=/home/kickpi/spatial-edgeav/cpp_runtime_src/build/edgeav_runtime \
+  --device ${EDGEAV_CAMERA} \
+  --width ${EDGEAV_WIDTH} \
+  --height ${EDGEAV_HEIGHT} \
+  --fps ${EDGEAV_FPS} \
+  --frames ${EDGEAV_FRAMES} \
+  --max-frame-records ${EDGEAV_MAX_FRAME_RECORDS} \
+  --format ${EDGEAV_FORMAT} \
+  --letterbox \
+  --report ${EDGEAV_ROOT}/runs/cpp_service/edgeav_runtime_report.json \
+  --heartbeat ${EDGEAV_ROOT}/runs/cpp_service/heartbeat.json \
+  --frames-json ${EDGEAV_ROOT}/runs/cpp_service/edgeav_runtime_frames.json \
+  --spatial-rules ${EDGEAV_SPATIAL_RULES} \
+  --observations-jsonl ${EDGEAV_ROOT}/runs/cpp_service/observations.jsonl \
+  --events-jsonl ${EDGEAV_ROOT}/runs/cpp_service/events.jsonl \
+  --rknn-model ${EDGEAV_MODEL} \
+  --rknn-input-dump ${EDGEAV_ROOT}/runs/cpp_service/last_rknn_input.ppm \
+  --original-frame-dump ${EDGEAV_ROOT}/runs/cpp_service/last_original_frame.ppm \
+  --rknn-latest-frame
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
