@@ -310,12 +310,19 @@ inside the board-side runtime. Latest verified result: `measured_fps=30.213`,
 dump enabled. `make annotate-cpp-latest-mjpeg-letterbox-original` draws
 `bbox_original_xyxy` detections on the 1280x720 original-frame snapshot.
 
-The project also includes a lightweight web dashboard. It does not require RTSP:
-the C++ service writes the latest camera MJPEG frame as `latest_frame.jpg`, and
-the dashboard exposes it as an HTTP MJPEG stream for browsers. The same page
-draws live zone polygons and detection/event boxes over the stream, shows
-runtime metrics, lists recent spatial events, and turns rule triggers into
-browser actions through Server-Sent Events: popup toast + optional beep sound.
+The project also includes a lightweight Frigate-like NVR dashboard. NVR means
+Network Video Recorder: a monitoring system that displays camera streams,
+tracks events, records evidence, and exposes alarm/configuration workflows. This
+project is a smaller embedded version focused on RK3576 camera AI rather than a
+full multi-camera recorder. It does not require RTSP for the browser path: the
+C++ service writes the latest camera MJPEG frame as `latest_frame.jpg`, and the
+dashboard exposes it as an HTTP MJPEG stream. The same page draws live zone
+polygons and detection/event boxes over the stream, shows runtime metrics,
+lists recent spatial events, monitors zone idle/active/alert state, and turns
+rule triggers into browser actions through Server-Sent Events: popup toast +
+optional beep sound. A browser-side Zone Editor lets operators drag polygon
+vertices on the live video and save updated zone calibration back to
+`spatial_rules.json`.
 The active scene rules are documented in [docs/spatial_rules.md](docs/spatial_rules.md);
 the current config focuses on entry-person, table-bottle, and walkway-blocking
 events rather than the older noisy chair-in-left-area demo rule.

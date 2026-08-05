@@ -38,15 +38,51 @@ workflow is:
 ```text
 move camera
   -> open dashboard
-  -> estimate new normalized zone coordinates
-  -> edit configs/spatial_rules.json
-  -> redeploy/restart the C++ service
+  -> use Zone Editor to drag polygon vertices
+  -> save configs/spatial_rules.json from the browser
+  -> restart the C++ service so the runtime rule engine reloads zones
 ```
 
-The dashboard reloads `/api/spatial-config` every 5 seconds, so visual zone
-overlays update after the config changes. The C++ spatial-rule engine still
-loads the rules at service startup, so actual event semantics require restarting
-`spatial-edgeav-cpp.service`.
+The dashboard reloads `/api/spatial-config` every 5 seconds and can save updated
+zone polygons with `POST /api/spatial-config`, so visual zone overlays update
+without redeploying code. The C++ spatial-rule engine still loads the rules at
+service startup, so actual event semantics require restarting
+`spatial-edgeav-cpp.service` after saving.
+
+## Frigate-style Zone Editor
+
+The dashboard includes a lightweight zone editor inspired by Frigate's mask and
+zone editor:
+
+```text
+open dashboard
+  -> select zone in Zone Editor
+  -> click Edit
+  -> drag the yellow polygon handles on the live video
+  -> click Save
+  -> restart spatial-edgeav-cpp.service
+```
+
+Saving only replaces the `zones` section of `spatial_rules.json`; the existing
+`rules` section is preserved. This lets the camera be moved or tilted and then
+recalibrated directly from the browser.
+
+The dashboard also exposes `/api/zone-status`, which continuously maps current
+detections into zones and shows each zone as:
+
+```text
+idle   = no object currently in the zone
+active = at least one detected object is currently in the zone
+alert  = a recent spatial rule event belongs to the zone
+```
+
+For realtime zone membership, the dashboard uses the bottom-center point of each
+bbox. This is useful for person and object monitoring because the point is closer
+to where the object contacts the scene. A full bbox intersection can look noisy:
+the top of a person may cross a tabletop zone even when the person is standing
+on the floor. The C++ rule engine still uses its configured rule relation, so the
+dashboard monitor is a live visualization layer rather than a replacement for
+the runtime policy engine.
 
 ## Current Scene Rules
 

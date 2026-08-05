@@ -88,8 +88,43 @@ height reported in `heartbeat.json`.
 /api/events?limit=20     polling fallback for spatial events
 /api/spatial-config      zones/rules converted for overlay drawing
 /api/latest-detections   latest C++ runtime detections for bbox overlay
+/api/zone-status         live per-zone idle/active/alert state
+POST /api/spatial-config save edited zone polygons
 /snapshot.jpg            current frame still image
 ```
+
+## Zone Editor
+
+The dashboard now behaves more like a small Frigate-style NVR UI. It keeps the
+live video on the left and adds a browser-side Zone Editor on the right:
+
+```text
+select a zone
+  -> Edit
+  -> drag polygon vertices on the live frame
+  -> Save
+  -> restart spatial-edgeav-cpp.service for rule-engine reload
+```
+
+The Save action updates only `zones` in `spatial_rules.json`; existing rules,
+thresholds, dwell settings, and messages are preserved. The overlay refreshes
+immediately after saving. The C++ runtime is intentionally restarted separately
+because it treats spatial rules as runtime configuration loaded at process
+startup.
+
+The Zone Monitor is separate from rule events. It continuously reads the latest
+detections and marks each zone as:
+
+| State | Meaning |
+| --- | --- |
+| `idle` | no current detection anchor is inside the zone |
+| `active` | at least one current detection anchor is inside the zone |
+| `alert` | a recent rule event belongs to the zone |
+
+The monitor uses the bottom-center point of each bbox for zone membership,
+matching a common NVR convention for ground-plane zones. This is more stable
+than full bbox overlap for people, because the bottom of the box better
+approximates where the person is standing.
 
 ## Security Model
 

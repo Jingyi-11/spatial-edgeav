@@ -16,6 +16,7 @@ import argparse
 import json
 import mimetypes
 import os
+import math
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -214,6 +215,70 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     button.secondary { background: #243445; }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .editor {
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+    }
+    .editor-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+    select {
+      width: 100%;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 13px;
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .zones-list {
+      max-height: 260px;
+      overflow: auto;
+      padding: 8px;
+    }
+    .zone-item {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 8px;
+      padding: 9px;
+      margin-bottom: 8px;
+    }
+    .zone-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .zone-item p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .zone-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      margin-right: 6px;
+      background: var(--muted);
+    }
+    .zone-dot.active { background: var(--good); }
+    .zone-dot.alert { background: var(--warn); }
     .toast {
       position: fixed;
       right: 18px;
@@ -276,6 +341,27 @@ INDEX_HTML = """<!doctype html>
       </section>
       <section>
         <div class="panel-head">
+          <span>Zone Editor</span>
+          <span id="editorState">view</span>
+        </div>
+        <div class="editor">
+          <div class="editor-row">
+            <select id="zoneSelect" aria-label="Select zone"></select>
+            <button class="secondary" id="toggleEdit">Edit</button>
+            <button id="saveZones" disabled>Save</button>
+          </div>
+          <div class="hint" id="editorHint">Select a zone and enter Edit mode. Drag polygon points on the video to recalibrate after moving the camera.</div>
+        </div>
+      </section>
+      <section>
+        <div class="panel-head">
+          <span>Zone Monitor</span>
+          <span id="zoneState">live</span>
+        </div>
+        <div class="zones-list" id="zonesList"></div>
+      </section>
+      <section>
+        <div class="panel-head">
           <span>Recent Spatial Events</span>
           <span id="eventState">polling</span>
         </div>
@@ -289,10 +375,15 @@ INDEX_HTML = """<!doctype html>
     let lastEventId = localStorage.getItem("edgeav:lastEventId") || "";
     let audioCtx = null;
     let zones = [];
+    let zoneStatuses = {};
     let detections = [];
     let recentEvents = [];
     let latestSequence = null;
     let streamShape = { width: 1280, height: 720 };
+    let editMode = false;
+    let selectedZoneId = "";
+    let draggingVertex = null;
+    let dirtyZones = false;
     const EVENT_HIGHLIGHT_FRAME_TTL = 90;
 
     function fmt(value, digits = 1) {
@@ -328,6 +419,58 @@ INDEX_HTML = """<!doctype html>
       return [x * canvas.width / streamShape.width, y * canvas.height / streamShape.height];
     }
 
+    function unscalePoint(x, y, canvas) {
+      return [x * streamShape.width / canvas.width, y * streamShape.height / canvas.height];
+    }
+
+    function clamp01(value) {
+      return Math.max(0, Math.min(1, value));
+    }
+
+    function eventToCanvasPoint(ev) {
+      const canvas = document.getElementById("overlay");
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      return [(ev.clientX - rect.left) * dpr, (ev.clientY - rect.top) * dpr];
+    }
+
+    function selectedZone() {
+      return zones.find(zone => zone.id === selectedZoneId) || zones[0] || null;
+    }
+
+    function zoneColor(zone) {
+      const state = zoneStatuses[zone.id]?.state || "idle";
+      if (editMode && zone.id === selectedZoneId) {
+        return { fill: "rgb(251 191 36 / 0.16)", stroke: "rgb(251 191 36 / 0.98)", label: "rgb(2 6 23 / 0.82)" };
+      }
+      if (state === "alert") return { fill: "rgb(251 191 36 / 0.16)", stroke: "rgb(251 191 36 / 0.95)", label: "rgb(2 6 23 / 0.72)" };
+      if (state === "active") return { fill: "rgb(52 211 153 / 0.12)", stroke: "rgb(52 211 153 / 0.9)", label: "rgb(2 6 23 / 0.72)" };
+      return { fill: "rgb(56 189 248 / 0.12)", stroke: "rgb(56 189 248 / 0.85)", label: "rgb(2 6 23 / 0.72)" };
+    }
+
+    function updateZoneSelector() {
+      const select = document.getElementById("zoneSelect");
+      const previous = selectedZoneId;
+      select.innerHTML = zones.map(zone => `<option value="${zone.id}">${zone.name || zone.id}</option>`).join("");
+      selectedZoneId = zones.some(zone => zone.id === previous) ? previous : (zones[0]?.id || "");
+      select.value = selectedZoneId;
+      document.getElementById("saveZones").disabled = !dirtyZones;
+    }
+
+    function renderZoneMonitor() {
+      const box = document.getElementById("zonesList");
+      box.innerHTML = zones.map(zone => {
+        const status = zoneStatuses[zone.id] || { state: "idle", object_count: 0, objects: [] };
+        const objects = (status.objects || []).map(obj => `${obj.class_name || "object"} ${obj.confidence ? Number(obj.confidence).toFixed(2) : ""}`).join(", ");
+        const state = status.state || "idle";
+        const className = state === "alert" ? "alert" : state === "active" ? "active" : "";
+        return `<div class="zone-item">
+          <div class="zone-top"><span><span class="zone-dot ${className}"></span>${zone.name || zone.id}</span><strong>${status.object_count || 0}</strong></div>
+          <p>${state}${objects ? " · " + objects : ""}</p>
+        </div>`;
+      }).join("") || `<div class="zone-item"><p>No zones configured.</p></div>`;
+    }
+
     function drawOverlay() {
       const canvas = document.getElementById("overlay");
       const img = document.getElementById("stream");
@@ -352,6 +495,7 @@ INDEX_HTML = """<!doctype html>
       for (const zone of zones) {
         const points = zone.polygon_xy || [];
         if (points.length < 3) continue;
+        const colors = zoneColor(zone);
         ctx.beginPath();
         points.forEach((pt, idx) => {
           const [x, y] = scalePoint(Number(pt[0]), Number(pt[1]), canvas);
@@ -359,17 +503,31 @@ INDEX_HTML = """<!doctype html>
           else ctx.lineTo(x, y);
         });
         ctx.closePath();
-        ctx.fillStyle = "rgb(56 189 248 / 0.12)";
-        ctx.strokeStyle = "rgb(56 189 248 / 0.85)";
+        ctx.fillStyle = colors.fill;
+        ctx.strokeStyle = colors.stroke;
         ctx.fill();
         ctx.stroke();
 
         const [lx, ly] = scalePoint(Number(points[0][0]), Number(points[0][1]), canvas);
-        const label = zone.name || zone.id || "zone";
-        ctx.fillStyle = "rgb(2 6 23 / 0.72)";
+        const status = zoneStatuses[zone.id];
+        const label = `${zone.name || zone.id || "zone"}${status && status.object_count ? " · " + status.object_count : ""}`;
+        ctx.fillStyle = colors.label;
         ctx.fillRect(lx, Math.max(0, ly - 20 * dpr), Math.min(260 * dpr, label.length * 8 * dpr + 18 * dpr), 20 * dpr);
         ctx.fillStyle = "rgb(226 232 240)";
         ctx.fillText(label, lx + 6 * dpr, Math.max(14 * dpr, ly - 6 * dpr));
+
+        if (editMode && zone.id === selectedZoneId) {
+          for (let idx = 0; idx < points.length; idx += 1) {
+            const [vx, vy] = scalePoint(Number(points[idx][0]), Number(points[idx][1]), canvas);
+            ctx.beginPath();
+            ctx.arc(vx, vy, Math.max(6, 6 * dpr), 0, Math.PI * 2);
+            ctx.fillStyle = "rgb(251 191 36)";
+            ctx.fill();
+            ctx.strokeStyle = "rgb(2 6 23)";
+            ctx.lineWidth = Math.max(2, 2 * dpr);
+            ctx.stroke();
+          }
+        }
       }
 
       for (const det of detections.slice(0, 12)) {
@@ -407,7 +565,10 @@ INDEX_HTML = """<!doctype html>
       try {
         const res = await fetch("/api/spatial-config", { cache: "no-store" });
         const data = await res.json();
-        zones = data.zones || [];
+        if (!dirtyZones) {
+          zones = data.zones || [];
+          updateZoneSelector();
+        }
         if (data.frame && data.frame.width && data.frame.height) {
           streamShape = data.frame;
         }
@@ -415,6 +576,48 @@ INDEX_HTML = """<!doctype html>
       } catch (err) {
         zones = [];
       }
+    }
+
+    async function loadZoneStatus() {
+      try {
+        const res = await fetch("/api/zone-status", { cache: "no-store" });
+        const data = await res.json();
+        zoneStatuses = {};
+        for (const zone of data.zones || []) {
+          zoneStatuses[zone.id] = zone;
+        }
+        document.getElementById("zoneState").textContent = "live";
+        renderZoneMonitor();
+        drawOverlay();
+      } catch (err) {
+        document.getElementById("zoneState").textContent = "error";
+      }
+    }
+
+    async function saveZones() {
+      const payloadZones = zones.map(zone => ({
+        id: zone.id,
+        name: zone.name || zone.id,
+        polygon_norm: (zone.polygon_xy || []).map(pt => [
+          Number((Number(pt[0]) / streamShape.width).toFixed(6)),
+          Number((Number(pt[1]) / streamShape.height).toFixed(6)),
+        ]),
+      }));
+      const res = await fetch("/api/spatial-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ zones: payloadZones }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "save failed");
+      }
+      zones = data.zones || zones;
+      dirtyZones = false;
+      updateZoneSelector();
+      document.getElementById("editorState").textContent = "saved";
+      document.getElementById("editorHint").textContent = "Saved. Restart spatial-edgeav-cpp.service for the C++ rule engine to use the new zones; the overlay updates immediately.";
+      drawOverlay();
     }
 
     async function loadDetections() {
@@ -506,6 +709,50 @@ INDEX_HTML = """<!doctype html>
       };
     }
 
+    function beginDrag(ev) {
+      if (!editMode) return;
+      const zone = selectedZone();
+      if (!zone) return;
+      const canvas = document.getElementById("overlay");
+      const [cx, cy] = eventToCanvasPoint(ev);
+      const dpr = window.devicePixelRatio || 1;
+      let best = null;
+      let bestDist = 18 * dpr;
+      (zone.polygon_xy || []).forEach((pt, idx) => {
+        const [vx, vy] = scalePoint(Number(pt[0]), Number(pt[1]), canvas);
+        const dist = Math.hypot(cx - vx, cy - vy);
+        if (dist < bestDist) {
+          best = idx;
+          bestDist = dist;
+        }
+      });
+      if (best === null) return;
+      draggingVertex = best;
+      ev.preventDefault();
+    }
+
+    function moveDrag(ev) {
+      if (!editMode || draggingVertex === null) return;
+      const zone = selectedZone();
+      if (!zone) return;
+      const canvas = document.getElementById("overlay");
+      const [cx, cy] = eventToCanvasPoint(ev);
+      const [x, y] = unscalePoint(cx, cy, canvas);
+      zone.polygon_xy[draggingVertex] = [
+        clamp01(x / streamShape.width) * streamShape.width,
+        clamp01(y / streamShape.height) * streamShape.height,
+      ];
+      dirtyZones = true;
+      document.getElementById("saveZones").disabled = false;
+      document.getElementById("editorState").textContent = "dirty";
+      drawOverlay();
+      ev.preventDefault();
+    }
+
+    function endDrag() {
+      draggingVertex = null;
+    }
+
     document.getElementById("enableAudio").addEventListener("click", () => {
       audioEnabled = true;
       beep();
@@ -515,14 +762,41 @@ INDEX_HTML = """<!doctype html>
       audioEnabled = true;
       beep();
     });
+    document.getElementById("zoneSelect").addEventListener("change", (ev) => {
+      selectedZoneId = ev.target.value;
+      drawOverlay();
+    });
+    document.getElementById("toggleEdit").addEventListener("click", () => {
+      editMode = !editMode;
+      document.getElementById("toggleEdit").textContent = editMode ? "Done" : "Edit";
+      document.getElementById("editorState").textContent = editMode ? "editing" : "view";
+      document.getElementById("editorHint").textContent = editMode
+        ? "Drag the yellow vertex handles on the selected zone. Save when the overlay matches the new camera view."
+        : "Select a zone and enter Edit mode. Drag polygon points on the video to recalibrate after moving the camera.";
+      document.getElementById("overlay").style.pointerEvents = editMode ? "auto" : "none";
+      drawOverlay();
+    });
+    document.getElementById("saveZones").addEventListener("click", async () => {
+      try {
+        await saveZones();
+      } catch (err) {
+        document.getElementById("editorState").textContent = "error";
+        document.getElementById("editorHint").textContent = err.message || String(err);
+      }
+    });
+    document.getElementById("overlay").addEventListener("pointerdown", beginDrag);
+    document.getElementById("overlay").addEventListener("pointermove", moveDrag);
+    window.addEventListener("pointerup", endDrag);
 
     loadHeartbeat();
     loadSpatialConfig();
+    loadZoneStatus();
     loadDetections();
     loadEvents();
     connectEvents();
     setInterval(loadHeartbeat, 1000);
     setInterval(loadSpatialConfig, 5000);
+    setInterval(loadZoneStatus, 700);
     setInterval(loadDetections, 700);
     window.addEventListener("resize", drawOverlay);
   </script>
@@ -557,6 +831,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def read_json(self, path: Path) -> object:
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def read_body_json(self, max_bytes: int = 200_000) -> object:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0:
+            raise ValueError("empty request body")
+        if length > max_bytes:
+            raise ValueError("request body too large")
+        return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def latest_frame_path(self) -> Path:
         heartbeat_path = self.run_dir / "heartbeat.json"
@@ -630,6 +912,101 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 events.append(item)
         return events
 
+    def latest_frame_record(self) -> dict[str, object] | None:
+        path = self.frames_path()
+        if not path.exists():
+            return None
+        frames = self.read_json(path)
+        if not isinstance(frames, list) or not frames:
+            return None
+        latest = frames[-1]
+        return latest if isinstance(latest, dict) else None
+
+    @staticmethod
+    def point_in_polygon(x: float, y: float, polygon: list[list[float]]) -> bool:
+        inside = False
+        if len(polygon) < 3:
+            return False
+        j = len(polygon) - 1
+        for i in range(len(polygon)):
+            xi, yi = polygon[i]
+            xj, yj = polygon[j]
+            intersects = ((yi > y) != (yj > y)) and (
+                x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi
+            )
+            if intersects:
+                inside = not inside
+            j = i
+        return inside
+
+    @staticmethod
+    def bbox_anchor(det: dict[str, object]) -> tuple[float, float] | None:
+        box = det.get("bbox_original_xyxy") or det.get("bbox_xyxy")
+        if not isinstance(box, list) or len(box) != 4:
+            return None
+        try:
+            x1, _y1, x2, y2 = [float(v) for v in box]
+        except (TypeError, ValueError):
+            return None
+        return ((x1 + x2) * 0.5, y2)
+
+    def normalized_config_zones(self, config: object) -> list[dict[str, object]]:
+        if not isinstance(config, dict):
+            return []
+        frame = self.frame_shape()
+        zones = []
+        for zone in config.get("zones", []):
+            if not isinstance(zone, dict):
+                continue
+            polygon_norm = zone.get("polygon_norm", [])
+            if not isinstance(polygon_norm, list):
+                continue
+            polygon_xy = [
+                [float(x) * frame["width"], float(y) * frame["height"]]
+                for x, y in polygon_norm
+            ]
+            zones.append({
+                "id": zone.get("id"),
+                "name": zone.get("name", zone.get("id")),
+                "polygon_norm": polygon_norm,
+                "polygon_xy": polygon_xy,
+            })
+        return zones
+
+    @staticmethod
+    def validate_zones(payload: object) -> list[dict[str, object]]:
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+        zones = payload.get("zones")
+        if not isinstance(zones, list) or not zones:
+            raise ValueError("zones must be a non-empty list")
+        clean_zones: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for idx, zone in enumerate(zones):
+            if not isinstance(zone, dict):
+                raise ValueError(f"zone[{idx}] must be an object")
+            zone_id = str(zone.get("id", "")).strip()
+            if not zone_id:
+                raise ValueError(f"zone[{idx}] is missing id")
+            if zone_id in seen:
+                raise ValueError(f"duplicate zone id: {zone_id}")
+            seen.add(zone_id)
+            name = str(zone.get("name", zone_id)).strip() or zone_id
+            polygon = zone.get("polygon_norm")
+            if not isinstance(polygon, list) or len(polygon) < 3:
+                raise ValueError(f"{zone_id} needs at least 3 polygon points")
+            clean_polygon = []
+            for pt_idx, pt in enumerate(polygon):
+                if not isinstance(pt, list) or len(pt) != 2:
+                    raise ValueError(f"{zone_id}.polygon_norm[{pt_idx}] must be [x, y]")
+                x = float(pt[0])
+                y = float(pt[1])
+                if not math.isfinite(x) or not math.isfinite(y):
+                    raise ValueError(f"{zone_id}.polygon_norm[{pt_idx}] is not finite")
+                clean_polygon.append([max(0.0, min(1.0, round(x, 6))), max(0.0, min(1.0, round(y, 6)))])
+            clean_zones.append({"id": zone_id, "name": name, "polygon_norm": clean_polygon})
+        return clean_zones
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/":
@@ -644,6 +1021,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.handle_spatial_config()
         elif parsed.path == "/api/latest-detections":
             self.handle_latest_detections()
+        elif parsed.path == "/api/zone-status":
+            self.handle_zone_status()
         elif parsed.path == "/events.sse":
             query = parse_qs(parsed.query)
             limit = int(query.get("limit", ["20"])[0])
@@ -652,6 +1031,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.handle_snapshot()
         elif parsed.path == "/stream.mjpg":
             self.handle_stream()
+        else:
+            self.send_error(HTTPStatus.NOT_FOUND)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/spatial-config":
+            self.handle_spatial_config_update()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -676,22 +1062,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             config = self.read_json(path)
             frame = self.frame_shape()
-            zones = []
-            for zone in config.get("zones", []):  # type: ignore[union-attr]
-                polygon_norm = zone.get("polygon_norm", [])
-                polygon_xy = [
-                    [float(x) * frame["width"], float(y) * frame["height"]]
-                    for x, y in polygon_norm
-                ]
-                zones.append({
-                    "id": zone.get("id"),
-                    "name": zone.get("name", zone.get("id")),
-                    "polygon_norm": polygon_norm,
-                    "polygon_xy": polygon_xy,
-                })
+            zones = self.normalized_config_zones(config)
             self.send_json({"frame": frame, "zones": zones, "rules": config.get("rules", [])})  # type: ignore[union-attr]
         except Exception as exc:
             self.send_json({"status": "error", "error": str(exc)}, 500)
+
+    def handle_spatial_config_update(self) -> None:
+        path = self.spatial_rules_path()
+        if not path:
+            self.send_json({"status": "error", "error": "spatial rules path not found"}, 404)
+            return
+        try:
+            zones = self.validate_zones(self.read_body_json())
+            config = self.read_json(path) if path.exists() else {"rules": []}
+            if not isinstance(config, dict):
+                raise ValueError("existing spatial config is not a JSON object")
+            config["zones"] = zones
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            tmp_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            tmp_path.replace(path)
+            frame = self.frame_shape()
+            self.send_json({"status": "ok", "frame": frame, "zones": self.normalized_config_zones(config), "rules": config.get("rules", [])})
+        except Exception as exc:
+            self.send_json({"status": "error", "error": str(exc)}, 400)
 
     def handle_latest_detections(self) -> None:
         path = self.frames_path()
@@ -710,6 +1103,68 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "ts_ms": latest.get("ts_ms"),
                 "detections": latest.get("detections", []),
             })
+        except Exception as exc:
+            self.send_json({"status": "error", "error": str(exc)}, 500)
+
+    def handle_zone_status(self) -> None:
+        path = self.spatial_rules_path()
+        if not path or not path.exists():
+            self.send_json({"frame": self.frame_shape(), "zones": []})
+            return
+        try:
+            config = self.read_json(path)
+            zones = self.normalized_config_zones(config)
+            latest = self.latest_frame_record() or {}
+            detections = latest.get("detections", [])
+            if not isinstance(detections, list):
+                detections = []
+            sequence = latest.get("sequence")
+            recent_events = self.read_events(40)
+            event_by_zone: dict[str, dict[str, object]] = {}
+            for event in recent_events:
+                zone_id = event.get("zone_id")
+                frame_index = event.get("frame_index")
+                if not zone_id:
+                    continue
+                if sequence is not None and frame_index is not None:
+                    try:
+                        if int(sequence) - int(frame_index) > 90:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                event_by_zone[str(zone_id)] = event
+
+            status_zones = []
+            for zone in zones:
+                zone_id = str(zone.get("id", ""))
+                polygon = zone.get("polygon_xy", [])
+                if not isinstance(polygon, list):
+                    polygon = []
+                objects = []
+                for det in detections:
+                    if not isinstance(det, dict):
+                        continue
+                    anchor = self.bbox_anchor(det)
+                    if not anchor:
+                        continue
+                    if self.point_in_polygon(anchor[0], anchor[1], polygon):  # type: ignore[arg-type]
+                        objects.append({
+                            "class_name": det.get("class_name"),
+                            "class_id": det.get("class_id"),
+                            "confidence": det.get("confidence"),
+                            "object_id": det.get("object_id", det.get("id")),
+                            "bbox_original_xyxy": det.get("bbox_original_xyxy"),
+                        })
+                state = "alert" if zone_id in event_by_zone else "active" if objects else "idle"
+                status_zones.append({
+                    "id": zone_id,
+                    "name": zone.get("name", zone_id),
+                    "state": state,
+                    "object_count": len(objects),
+                    "objects": objects[:12],
+                    "last_event": event_by_zone.get(zone_id),
+                })
+            self.send_json({"frame": self.frame_shape(), "sequence": sequence, "zones": status_zones})
         except Exception as exc:
             self.send_json({"status": "error", "error": str(exc)}, 500)
 
