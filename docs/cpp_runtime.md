@@ -281,11 +281,27 @@ Mac build: ok
 Mac simulated runtime: ok
 RK3576 deploy build: ok
 RK3576 synthetic RKNN smoke: ok
-RK3576 live YUYV camera test: blocked by active Python systemd service holding /dev/video73
+RK3576 live YUYV camera test: ok after stopping the Python systemd service
 ```
 
-Before running the live C++ camera test, stop the Python service that owns the
-camera device:
+Verified live YUYV result:
+
+```text
+mode: v4l2
+camera: /dev/video73, 1280x720, YUYV
+frames processed: 3
+measured FPS: 9.996
+input_source: v4l2_yuyv_rgb_resized
+RKNN mean inference: 48.046 ms
+postprocess status: ok
+detections after NMS: 0
+reports:
+  runs/rk3576_cpp_runtime/edgeav_runtime_live_yuyv_report.json
+  runs/rk3576_cpp_runtime/edgeav_runtime_live_yuyv_rknn_report.json
+```
+
+Before running the live C++ camera test again, stop the Python service that owns
+the camera device, then restart it after the test:
 
 ```bash
 sudo systemctl stop spatial-edgeav-rknn.service
@@ -294,6 +310,6 @@ sudo systemctl start spatial-edgeav-rknn.service
 ```
 
 The next engineering step is to validate the live C++ YUYV path with the Python
-service stopped, then add MJPEG decode or a GStreamer/RGA preprocessing path so
-the runtime can use the same high-FPS camera format as the existing Python
-service.
+service stopped against richer scenes, then add MJPEG decode or a GStreamer/RGA
+preprocessing path so the runtime can use the same high-FPS camera format as
+the existing Python service.

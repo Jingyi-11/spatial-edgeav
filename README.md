@@ -223,6 +223,9 @@ This converts a captured YUYV frame into an RGB `640x640` RKNN input tensor and
 uses the same C++ YOLOv8 postprocess path. Stop the Python systemd camera
 service first if it is holding `/dev/video73`.
 
+Verified live YUYV result: `frames=3`, `measured_fps=9.996`,
+`input_source=v4l2_yuyv_rgb_resized`, `RKNN mean=48.046 ms`, postprocess OK.
+
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
 ## RK3567/RK3576 Media Scripts
