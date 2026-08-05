@@ -285,6 +285,18 @@ RKNN frames; letterbox measured `preprocess_mean=11.870 ms`,
 `rknn_end_to_end_mean=50.939 ms`, and `20/30` RKNN frames while preserving the
 camera aspect ratio with gray padding.
 
+Letterbox runs now also emit original camera-coordinate boxes as
+`bbox_original_xyxy`, using the recorded scale/pad metadata. On 1280x720 input,
+the verified letterbox metadata is `content_size=[640,360]`, `pad_xy=[0,140]`,
+and `scale_xy=[0.5,0.5]`.
+
+GStreamer and Rockchip RGA are available on the RK3576 board. `make
+probe-media-accel-board` verifies GStreamer 1.24.2, `gstreamer-app-1.0`, RGA
+2.1.0, `/dev/rga`, and runs a software GStreamer
+`v4l2src ! jpegdec ! videoscale ! fakesink` benchmark at `22.945 FPS` for 120
+frames. This is now the measured baseline before replacing CPU resize/decode
+with a GStreamer appsink or RGA-backed preprocessing path.
+
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
 ## RK3567/RK3576 Media Scripts

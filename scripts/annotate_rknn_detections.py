@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report", required=True, type=Path, help="RKNN JSON report or continuous frames JSON with detections")
     parser.add_argument("--output", required=True, type=Path, help="Annotated PNG output path")
     parser.add_argument("--frame-index", type=int, default=-1, help="Frame index for continuous frames JSON, default last frame")
+    parser.add_argument("--bbox-key", default="bbox_xyxy", help="Detection bbox key to draw, default bbox_xyxy")
     return parser.parse_args()
 
 
@@ -116,7 +117,7 @@ def annotate_with_ppm(args: argparse.Namespace, detections: list[dict]) -> None:
     width, height, pixels = read_ppm(args.image)
     colors = [(0, 255, 102), (255, 204, 0), (0, 170, 255), (255, 102, 204), (255, 102, 51)]
     for index, detection in enumerate(detections):
-        draw_rect_ppm(pixels, width, height, detection["bbox_xyxy"], colors[index % len(colors)])
+        draw_rect_ppm(pixels, width, height, detection[args.bbox_key], colors[index % len(colors)])
     write_ppm(args.output, width, height, pixels)
 
 
@@ -126,7 +127,7 @@ def annotate_with_pillow(args: argparse.Namespace, detections: list[dict]) -> No
     colors = ["#00ff66", "#ffcc00", "#00aaff", "#ff66cc", "#ff6633"]
 
     for index, detection in enumerate(detections):
-        x1, y1, x2, y2 = detection["bbox_xyxy"]
+        x1, y1, x2, y2 = detection[args.bbox_key]
         class_id = int(detection["class_id"])
         confidence = float(detection["confidence"])
         label = f"{class_name(class_id)} {confidence:.2f}"

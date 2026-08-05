@@ -758,10 +758,107 @@ also slightly faster because the DCT-scaled MJPEG frame is about 640x360, so
 the runtime writes the valid 16:9 image region and pads the rest instead of
 resizing the image content to the full 640x640 square.
 
-Important follow-up: the current C++ detections are reported in the 640x640
-model-input coordinate system. For production overlays on the original
-1280x720 frame, the runtime should store the letterbox scale and padding, then
-map boxes back to original camera coordinates.
+## Phase 5O: Original-Frame Bounding Box Mapping
+
+The runtime now records preprocessing geometry and emits both model-input and
+original-frame box coordinates. This keeps existing 640x640 debugging intact
+while preparing the project for original-frame overlays and spatial rules.
+
+Example letterbox metadata for 1280x720 camera input:
+
+```json
+"preprocessing": {
+  "image_size": 640,
+  "mode": "letterbox",
+  "pad_value": 114,
+  "content_size": [640, 360],
+  "pad_xy": [0.0, 140.0],
+  "scale_xy": [0.5, 0.5]
+}
+```
+
+Example detection output:
+
+```json
+{
+  "class_id": 56,
+  "confidence": 0.7795,
+  "bbox_xyxy": [305.51, 378.86, 490.90, 497.31],
+  "bbox_original_xyxy": [611.01, 477.73, 981.80, 714.63]
+}
+```
+
+Coordinate meanings:
+
+- `bbox_xyxy` is the model-input coordinate system after preprocessing. For
+  this project that is 640x640.
+- `bbox_original_xyxy` is mapped back to the original camera frame. For the
+  current C920 test that is 1280x720.
+- Direct resize uses separate x/y scales from 640 back to camera width/height.
+- Letterbox subtracts pad first, then divides by the content scale, and clips
+  the result to the original frame bounds.
+
+The annotation helper now accepts `--bbox-key`, defaulting to `bbox_xyxy`.
+Future original-frame overlay can use `--bbox-key bbox_original_xyxy` once the
+runtime also dumps or streams the original RGB frame.
+
+## Phase 5P: GStreamer/RGA Availability Probe
+
+V4L2 and GStreamer are related but not equivalent. V4L2 is the Linux kernel
+camera/video device API. GStreamer is a user-space media pipeline framework.
+When GStreamer captures a USB camera through `v4l2src`, it is still using V4L2
+underneath, but GStreamer manages pipeline elements such as decode, colorspace
+conversion, scaling, buffering, and appsink handoff.
+
+The project now has a board-side media acceleration probe:
+
+```bash
+make probe-media-accel-board
+```
+
+Verified RK3576 probe result:
+
+```text
+gstreamer-1.0: 1.24.2
+gstreamer-app-1.0: 1.24.2
+librga: 2.1.0
+headers:
+  /usr/include/gstreamer-1.0/gst/gst.h
+  /usr/include/gstreamer-1.0/gst/app/gstappsink.h
+  /usr/include/rga/im2d.h
+  /usr/include/rga/RgaApi.h
+devices:
+  /dev/rga
+  /dev/dri/renderD128
+  /dev/dri/renderD129
+```
+
+The same probe runs a software GStreamer baseline:
+
+```text
+v4l2src
+  -> image/jpeg 1280x720@30
+  -> jpegparse
+  -> jpegdec
+  -> videoconvert
+  -> videoscale
+  -> RGB 640x360
+  -> fakesink
+```
+
+Measured result: 120 frames in 5230 ms, about `22.945 FPS`.
+
+Interpretation:
+
+- GStreamer is ready as a future capture/decode pipeline replacement for the
+  hand-written V4L2 + libjpeg path.
+- The tested GStreamer pipeline uses software `jpegdec/videoscale`, so it is
+  not automatically faster than the current C++ libjpeg path.
+- RGA is available and should be the next optional preprocessing backend for
+  resize/color conversion, exposed as a fallback-controlled mode such as
+  `--preprocess-backend cpu|rga`.
+- The safest next engineering step is to add RGA as an optional backend while
+  keeping the current CPU path as the reference implementation.
 
 Before running the live C++ camera test again, stop the Python service that owns
 the camera device, then restart it after the test:

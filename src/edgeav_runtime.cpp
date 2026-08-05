@@ -82,6 +82,15 @@ struct FrameRecord {
     uint32_t top_detection_count = 0;
 };
 
+struct PreprocessMapping {
+    double scale_x = 1.0;
+    double scale_y = 1.0;
+    double pad_x = 0.0;
+    double pad_y = 0.0;
+    uint32_t content_width = 640;
+    uint32_t content_height = 640;
+};
+
 struct RuntimeContext {
     const RuntimeConfig *config = nullptr;
     RuntimeStats *stats = nullptr;
@@ -253,6 +262,64 @@ double mean_or_zero(double total, uint64_t count)
     return count > 0 ? total / static_cast<double>(count) : 0.0;
 }
 
+PreprocessMapping compute_preprocess_mapping(const RuntimeConfig &config)
+{
+    PreprocessMapping mapping;
+    if (config.width == 0 || config.height == 0) {
+        return mapping;
+    }
+    if (!config.letterbox) {
+        mapping.scale_x = 640.0 / static_cast<double>(config.width);
+        mapping.scale_y = 640.0 / static_cast<double>(config.height);
+        mapping.content_width = 640;
+        mapping.content_height = 640;
+        return mapping;
+    }
+
+    uint64_t scaled_width_by_height = static_cast<uint64_t>(640u) * config.width / config.height;
+    if (scaled_width_by_height <= 640u) {
+        mapping.content_width = static_cast<uint32_t>(scaled_width_by_height);
+        mapping.content_height = 640u;
+    } else {
+        mapping.content_width = 640u;
+        mapping.content_height = static_cast<uint32_t>(static_cast<uint64_t>(640u) * config.height / config.width);
+    }
+    if (mapping.content_width == 0 || mapping.content_height == 0) {
+        mapping.content_width = 640u;
+        mapping.content_height = 640u;
+    }
+    mapping.pad_x = static_cast<double>((640u - mapping.content_width) / 2u);
+    mapping.pad_y = static_cast<double>((640u - mapping.content_height) / 2u);
+    mapping.scale_x = static_cast<double>(mapping.content_width) / static_cast<double>(config.width);
+    mapping.scale_y = static_cast<double>(mapping.content_height) / static_cast<double>(config.height);
+    return mapping;
+}
+
+double clamp_double(double value, double low, double high)
+{
+    if (value < low) {
+        return low;
+    }
+    if (value > high) {
+        return high;
+    }
+    return value;
+}
+
+void map_model_bbox_to_original(const RuntimeConfig &config, const RknnDetection &det, double mapped[4])
+{
+    PreprocessMapping mapping = compute_preprocess_mapping(config);
+    double width_max = config.width > 0 ? static_cast<double>(config.width) : 640.0;
+    double height_max = config.height > 0 ? static_cast<double>(config.height) : 640.0;
+    double sx = mapping.scale_x > 0.0 ? mapping.scale_x : 1.0;
+    double sy = mapping.scale_y > 0.0 ? mapping.scale_y : 1.0;
+
+    mapped[0] = clamp_double((static_cast<double>(det.bbox_xyxy[0]) - mapping.pad_x) / sx, 0.0, width_max);
+    mapped[1] = clamp_double((static_cast<double>(det.bbox_xyxy[1]) - mapping.pad_y) / sy, 0.0, height_max);
+    mapped[2] = clamp_double((static_cast<double>(det.bbox_xyxy[2]) - mapping.pad_x) / sx, 0.0, width_max);
+    mapped[3] = clamp_double((static_cast<double>(det.bbox_xyxy[3]) - mapping.pad_y) / sy, 0.0, height_max);
+}
+
 bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStats &stats, const char *status)
 {
     FILE *file = fopen(path, "w");
@@ -271,9 +338,16 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
                  config.height,
                  config.fps,
                  pixel_format_name(config.pixel_format));
-    fprintf(file, "  \"preprocessing\": {\"image_size\": 640, \"mode\": \"%s\", \"pad_value\": %u},\n",
+    PreprocessMapping mapping = compute_preprocess_mapping(config);
+    fprintf(file, "  \"preprocessing\": {\"image_size\": 640, \"mode\": \"%s\", \"pad_value\": %u, \"content_size\": [%u, %u], \"pad_xy\": [%.3f, %.3f], \"scale_xy\": [%.6f, %.6f]},\n",
             config.letterbox ? "letterbox" : "direct_resize",
-            config.letterbox ? 114u : 0u);
+            config.letterbox ? 114u : 0u,
+            mapping.content_width,
+            mapping.content_height,
+            mapping.pad_x,
+            mapping.pad_y,
+            mapping.scale_x,
+            mapping.scale_y);
     fprintf(file, "  \"frames_processed\": %llu,\n", static_cast<unsigned long long>(stats.frames));
     fprintf(file, "  \"bytes_processed\": %llu,\n", static_cast<unsigned long long>(stats.bytes));
     fprintf(file, "  \"last_sequence\": %llu,\n", static_cast<unsigned long long>(stats.last_sequence));
@@ -310,7 +384,7 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
     return true;
 }
 
-bool write_frames_json(const char *path, const FrameRecord *records, uint32_t count)
+bool write_frames_json(const char *path, const RuntimeConfig &config, const FrameRecord *records, uint32_t count)
 {
     if (!path) {
         return false;
@@ -333,7 +407,9 @@ bool write_frames_json(const char *path, const FrameRecord *records, uint32_t co
                 record.end_to_end_ms);
         for (uint32_t det_index = 0; det_index < record.top_detection_count; ++det_index) {
             const RknnDetection &det = record.top_detections[det_index];
-            fprintf(file, "%s{\"id\": %d, \"class_id\": %d, \"confidence\": %.4f, \"bbox_xyxy\": [%.2f, %.2f, %.2f, %.2f]}",
+            double original_bbox[4];
+            map_model_bbox_to_original(config, det, original_bbox);
+            fprintf(file, "%s{\"id\": %d, \"class_id\": %d, \"confidence\": %.4f, \"bbox_xyxy\": [%.2f, %.2f, %.2f, %.2f], \"bbox_original_xyxy\": [%.2f, %.2f, %.2f, %.2f]}",
                     det_index == 0 ? "" : ", ",
                     det.id,
                     det.class_id,
@@ -341,7 +417,11 @@ bool write_frames_json(const char *path, const FrameRecord *records, uint32_t co
                     det.bbox_xyxy[0],
                     det.bbox_xyxy[1],
                     det.bbox_xyxy[2],
-                    det.bbox_xyxy[3]);
+                    det.bbox_xyxy[3],
+                    original_bbox[0],
+                    original_bbox[1],
+                    original_bbox[2],
+                    original_bbox[3]);
         }
         fprintf(file, "]}%s\n", index + 1 < count ? "," : "");
     }
@@ -912,7 +992,7 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
     stats->rknn_input_ready = context.rknn_input_ready;
 
     if (config.rknn_every_frame && frame_records) {
-        write_frames_json(config.frames_json_path, frame_records, context.frame_record_count);
+        write_frames_json(config.frames_json_path, config, frame_records, context.frame_record_count);
         if (stats->rknn_failures > 0 && result == 0) {
             result = stats->rknn_result == 0 ? -1 : stats->rknn_result;
         }
