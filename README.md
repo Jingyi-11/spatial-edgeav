@@ -260,6 +260,15 @@ while MJPEG measured `29.900 FPS` with about `190 KB/frame`. This confirms that
 MJPEG can remove the current YUYV input-rate bottleneck before adding decode and
 RGA preprocessing.
 
+MJPEG is now integrated into the C/C++ RKNN runtime with board-side `libjpeg`
+decode. Verified latest-frame MJPEG result on RK3576: `frames=30`,
+`measured_fps=30.218`, `rknn_frames=15`, `skipped_frames=15`, `failures=0`,
+`detections_total=36`, `preprocess_mean=17.425 ms`,
+`inference_mean=33.937 ms`, `postprocess_mean=16.381 ms`, and
+`rknn_end_to_end_mean=69.199 ms`. The skip count is expected in latest-frame
+mode: camera input stays real-time while the worker drops stale frames instead
+of building queue latency.
+
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
 ## RK3567/RK3576 Media Scripts

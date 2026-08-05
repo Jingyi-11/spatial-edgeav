@@ -35,6 +35,7 @@ retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
 retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   src/edgeav_runtime.cpp \
   src/rknn_detector.cpp \
+  src/jpeg_decode.cpp \
   src/camera_capture.c \
   src/pipeline.c \
   src/yuv.c \
@@ -45,12 +46,13 @@ retry_command scp -o BatchMode=yes -o ConnectTimeout=8 \
   include/pipeline.h \
   include/rknn_api_compat.h \
   include/rknn_detector.h \
+  include/jpeg_decode.h \
   include/yuv.h \
   "${BOARD_HOST}:${REMOTE_SRC_DIR}/include/"
 
 echo "Building edgeav_runtime on RK3576..."
 retry_command ssh -o BatchMode=yes -o ConnectTimeout=8 "${BOARD_HOST}" \
-  "cd '${REMOTE_SRC_DIR}' && make edgeav-runtime"
+  "cd '${REMOTE_SRC_DIR}' && make edgeav-runtime JPEG=1"
 
 echo "Running non-camera simulated runtime smoke test..."
 retry_command ssh -o BatchMode=yes -o ConnectTimeout=8 "${BOARD_HOST}" \

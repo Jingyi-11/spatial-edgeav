@@ -8,6 +8,10 @@
 
 #include <pthread.h>
 
+#ifdef EDGEAV_ENABLE_LIBJPEG
+#include "jpeg_decode.h"
+#endif
+
 extern "C" {
 #include "camera_capture.h"
 #include "pipeline.h"
@@ -92,6 +96,7 @@ struct LatestFrameState {
     pthread_cond_t condition;
     uint8_t *latest_frame = nullptr;
     size_t latest_frame_size = 0;
+    size_t latest_frame_bytes = 0;
     uint32_t width = 0;
     uint32_t height = 0;
     PixelFormat pixel_format = PIXEL_FORMAT_UNKNOWN;
@@ -346,6 +351,51 @@ bool write_rgb_ppm(const char *path, const uint8_t *rgb, uint32_t width, uint32_
     return ok;
 }
 
+bool pixel_format_supported_for_rknn(PixelFormat format)
+{
+    if (format == PIXEL_FORMAT_YUYV) {
+        return true;
+    }
+#ifdef EDGEAV_ENABLE_LIBJPEG
+    if (format == PIXEL_FORMAT_MJPEG) {
+        return true;
+    }
+#endif
+    return false;
+}
+
+const char *rknn_input_source_name(PixelFormat format)
+{
+    if (format == PIXEL_FORMAT_YUYV) {
+        return "v4l2_yuyv_rgb_resized";
+    }
+    if (format == PIXEL_FORMAT_MJPEG) {
+        return "v4l2_mjpeg_decoded_rgb_resized";
+    }
+    return "v4l2_unsupported";
+}
+
+int preprocess_frame_to_rknn_input(
+    const uint8_t *data,
+    size_t size,
+    uint32_t width,
+    uint32_t height,
+    PixelFormat pixel_format,
+    uint8_t *rknn_input)
+{
+    if (pixel_format == PIXEL_FORMAT_YUYV) {
+        return yuyv_to_rgb_resized(data, size, width, height, rknn_input, 640, 640);
+    }
+#ifdef EDGEAV_ENABLE_LIBJPEG
+    if (pixel_format == PIXEL_FORMAT_MJPEG) {
+        uint32_t decoded_width = 0;
+        uint32_t decoded_height = 0;
+        return mjpeg_to_rgb_resized(data, size, rknn_input, 640, 640, &decoded_width, &decoded_height);
+    }
+#endif
+    return -1;
+}
+
 void on_frame(const VideoFrame *frame, void *userdata)
 {
     auto *context = static_cast<RuntimeContext *>(userdata);
@@ -358,16 +408,15 @@ void on_frame(const VideoFrame *frame, void *userdata)
     stats->frames++;
     stats->bytes += frame->size;
 
-    if (context->config->rknn_model_path && context->rknn_input && frame->pixel_format == PIXEL_FORMAT_YUYV) {
+    if (context->config->rknn_model_path && context->rknn_input && pixel_format_supported_for_rknn(frame->pixel_format)) {
         uint64_t preprocess_start_us = monotonic_time_us();
-        int preprocess_result = yuyv_to_rgb_resized(
+        int preprocess_result = preprocess_frame_to_rknn_input(
             frame->data,
             frame->size,
             frame->width,
             frame->height,
-            context->rknn_input,
-            640,
-            640);
+            frame->pixel_format,
+            context->rknn_input);
         uint64_t preprocess_end_us = monotonic_time_us();
         if (preprocess_result == 0) {
             double preprocess_ms = elapsed_ms(preprocess_start_us, preprocess_end_us);
@@ -440,11 +489,12 @@ void on_latest_frame(const VideoFrame *frame, void *userdata)
     pthread_mutex_lock(&state->mutex);
     record_capture_stats(state->stats, frame);
 
-    if (frame->pixel_format != PIXEL_FORMAT_YUYV || frame->size > state->latest_frame_size) {
+    if (!pixel_format_supported_for_rknn(frame->pixel_format) || frame->size > state->latest_frame_size) {
         pthread_mutex_unlock(&state->mutex);
         return;
     }
     memcpy(state->latest_frame, frame->data, frame->size);
+    state->latest_frame_bytes = frame->size;
     state->width = frame->width;
     state->height = frame->height;
     state->pixel_format = frame->pixel_format;
@@ -511,6 +561,8 @@ void latest_frame_worker(
         uint64_t sequence = 0;
         uint32_t width = 0;
         uint32_t height = 0;
+        PixelFormat pixel_format = PIXEL_FORMAT_UNKNOWN;
+        size_t frame_bytes = 0;
         pthread_mutex_lock(&state->mutex);
         while (!state->done && (!state->has_frame || state->latest_sequence == state->consumed_sequence)) {
             pthread_cond_wait(&state->condition, &state->mutex);
@@ -519,16 +571,18 @@ void latest_frame_worker(
             pthread_mutex_unlock(&state->mutex);
             break;
         }
-        size_t copy_size = state->latest_frame_size < raw_frame_size ? state->latest_frame_size : raw_frame_size;
+        size_t copy_size = state->latest_frame_bytes < raw_frame_size ? state->latest_frame_bytes : raw_frame_size;
         memcpy(raw_frame, state->latest_frame, copy_size);
         sequence = state->latest_sequence;
         width = state->width;
         height = state->height;
+        pixel_format = state->pixel_format;
+        frame_bytes = copy_size;
         state->consumed_sequence = sequence;
         pthread_mutex_unlock(&state->mutex);
 
         uint64_t preprocess_start_us = monotonic_time_us();
-        int preprocess_result = yuyv_to_rgb_resized(raw_frame, raw_frame_size, width, height, rknn_input, 640, 640);
+        int preprocess_result = preprocess_frame_to_rknn_input(raw_frame, frame_bytes, width, height, pixel_format, rknn_input);
         uint64_t preprocess_end_us = monotonic_time_us();
         if (preprocess_result != 0) {
             pthread_mutex_lock(&state->mutex);
@@ -679,7 +733,7 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
     pthread_t worker_thread;
     bool latest_state_initialized = false;
     bool worker_started = false;
-    if (config.rknn_model_path && config.pixel_format == PIXEL_FORMAT_YUYV) {
+    if (config.rknn_model_path && pixel_format_supported_for_rknn(config.pixel_format)) {
         context.rknn_input_size = 640u * 640u * 3u;
         rknn_input = static_cast<uint8_t *>(calloc(context.rknn_input_size, 1));
         context.rknn_input = rknn_input;
@@ -713,6 +767,10 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
 
             if (config.rknn_latest_frame) {
                 size_t raw_frame_size = static_cast<size_t>(config.width) * config.height * 2u;
+                size_t mjpeg_buffer_size = static_cast<size_t>(config.width) * config.height * 3u;
+                if (config.pixel_format == PIXEL_FORMAT_MJPEG && mjpeg_buffer_size > raw_frame_size) {
+                    raw_frame_size = mjpeg_buffer_size;
+                }
                 latest_frame_buffer = static_cast<uint8_t *>(calloc(raw_frame_size, 1));
                 worker_frame_buffer = static_cast<uint8_t *>(calloc(raw_frame_size, 1));
                 if (!latest_frame_buffer || !worker_frame_buffer) {
@@ -801,7 +859,7 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
             config.rknn_report_path,
             context.rknn_input,
             static_cast<uint32_t>(context.rknn_input_size),
-            "v4l2_yuyv_rgb_resized",
+            rknn_input_source_name(config.pixel_format),
             config.rknn_runs,
             config.rknn_warmup,
             0,
@@ -813,8 +871,11 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
             snprintf(stats->error, sizeof(stats->error), "rknn_detector_smoke failed");
             result = rknn_result;
         }
-    } else if (result == 0 && config.rknn_model_path && config.pixel_format != PIXEL_FORMAT_YUYV) {
-        snprintf(stats->error, sizeof(stats->error), "rknn live input currently requires YUYV");
+    } else if (result == 0 && config.rknn_model_path && !pixel_format_supported_for_rknn(config.pixel_format)) {
+        snprintf(stats->error, sizeof(stats->error), "rknn live input format unsupported by this build");
+        result = -1;
+    } else if (result == 0 && config.rknn_model_path && !context.rknn_input_ready && !config.rknn_every_frame) {
+        snprintf(stats->error, sizeof(stats->error), "rknn live input was not prepared");
         result = -1;
     }
 

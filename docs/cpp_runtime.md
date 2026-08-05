@@ -413,13 +413,14 @@ The runtime now has a second continuous mode:
 
 ```text
 capture callback
-  -> copy raw YUYV into one latest-frame buffer
+  -> copy raw YUYV/MJPEG into one latest-frame buffer
   -> signal worker
   -> immediately return buffer to V4L2
 
 inference worker
-  -> copy latest raw YUYV frame
-  -> resize/convert to RGB 640x640
+  -> copy latest raw frame
+  -> YUYV convert or MJPEG decode
+  -> resize to RGB 640x640
   -> RKNN inference
   -> YOLOv8 postprocess
   -> per-frame JSON + heartbeat
@@ -464,11 +465,29 @@ artifacts:
   runs/rk3576_cpp_runtime/edgeav_runtime_latest_yuyv_annotated.ppm
 ```
 
-The latest-frame run did not skip frames because the current YUYV camera mode is
-already delivering about 10 FPS, and the worker can keep up with that rate. The
-benefit of this architecture becomes more important when capture moves to a
-higher-FPS MJPEG/GStreamer/RGA path: old frames can be dropped instead of
-building latency in a queue, keeping inference aligned with the newest scene.
+The latest-frame YUYV run did not skip frames because the current YUYV camera
+mode is already delivering about 10 FPS, and the worker can keep up with that
+rate. The benefit of this architecture becomes more important when capture
+moves to a higher-FPS MJPEG/GStreamer/RGA path: old frames can be dropped
+instead of building latency in a queue, keeping inference aligned with the
+newest scene.
+
+Related preprocessing concepts:
+
+- MJPEG can raise camera FPS because the USB camera sends compressed JPEG
+  frames instead of raw YUYV bytes. In the verified 720p scene, YUYV was about
+  1.84 MB/frame while MJPEG was about 190 KB/frame.
+- GStreamer can improve a production pipeline because it already has mature
+  media elements for V4L2 capture, JPEG parse/decode, buffering, and appsink
+  handoff. It is often easier to build robust streaming pipelines with
+  GStreamer than by hand-rolling every buffer transition.
+- RGA can improve preprocessing because Rockchip's raster accelerator can do
+  resize/color-convert style work outside the CPU. The NPU should be reserved
+  for neural network inference; it does not decode JPEG or perform general
+  camera format conversion.
+- Current C/C++ YUYV preprocessing is CPU-based, and current C/C++ MJPEG
+  preprocessing uses CPU `libjpeg`. A later optimization can replace resize
+  and color conversion with RGA while leaving RKNN on the NPU.
 
 ## Phase 5K: Capture-Only YUYV vs MJPEG Input Benchmark
 
@@ -518,16 +537,66 @@ The capture-only benchmark proves that MJPEG is worth integrating because it
 fixes the input-rate side of the pipeline. Decode and RGA work will decide how
 much of that 30 FPS can be preserved after preprocessing and inference.
 
+## Phase 5L: MJPEG Decode + Latest-Frame RKNN Runtime
+
+The C/C++ runtime now supports real MJPEG camera input in the RKNN path when
+built with `JPEG=1`. The board deployment script enables this build mode and
+links `libjpeg`:
+
+```bash
+make deploy-cpp-runtime-board
+make run-cpp-latest-mjpeg-board
+make annotate-cpp-latest-mjpeg
+```
+
+Runtime path:
+
+```text
+USB camera /dev/video73
+  -> V4L2 MJPEG compressed frame
+  -> latest-frame buffer
+  -> CPU libjpeg decode to RGB
+  -> CPU resize to 640x640 RGB
+  -> RKNN NPU inference
+  -> C++ YOLOv8 postprocess
+  -> JSON report + annotated PPM
+```
+
+Verified RK3576 MJPEG latest-frame result:
+
+```text
+frames processed: 30
+measured capture FPS: 30.218
+rknn frames: 15
+skipped frames: 15
+rknn failures: 0
+detections total: 36
+preprocess mean: 17.425 ms
+inference mean: 33.937 ms
+postprocess mean: 16.381 ms
+RKNN end-to-end mean: 69.199 ms
+last-frame detections: chair 0.8516, bottle 0.4588
+artifacts:
+  runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_report.json
+  runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_frames.json
+  runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_input.ppm
+  runs/rk3576_cpp_runtime/edgeav_runtime_latest_mjpeg_annotated.ppm
+```
+
+This is an important behavior change from YUYV. MJPEG lets the camera deliver
+around 30 FPS, while the current CPU decode + resize + RKNN + postprocess path
+processes around 15 frames during the same 30-frame capture window. In
+latest-frame mode this is acceptable for real-time perception: the system drops
+stale frames instead of building a long queue and increasing visual latency.
+The next optimization target is preprocessing acceleration, especially
+replacing CPU resize/color conversion with RGA or moving capture and decode
+into a GStreamer pipeline.
+
 Before running the live C++ camera test again, stop the Python service that owns
 the camera device, then restart it after the test:
 
 ```bash
 sudo systemctl stop spatial-edgeav-rknn.service
-make run-cpp-live-yuyv-board
+make run-cpp-latest-mjpeg-board
 sudo systemctl start spatial-edgeav-rknn.service
 ```
-
-The next engineering step is to move this synchronous baseline into a
-producer-consumer runtime shape, then add MJPEG decode or a GStreamer/RGA
-preprocessing path so capture and preprocessing can run closer to the requested
-30 FPS while RKNN inference continues on the NPU.
