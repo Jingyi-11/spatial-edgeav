@@ -181,6 +181,17 @@ struct LatestWorkerArgs {
     uint32_t *frame_record_count = nullptr;
 };
 
+void store_frame_result(
+    FrameRecord *frame_records,
+    uint32_t frame_record_capacity,
+    uint32_t *frame_record_count,
+    uint64_t sequence,
+    double preprocess_ms,
+    double decode_ms,
+    double resize_or_convert_ms,
+    double end_to_end_ms,
+    const RknnFrameResult &result);
+
 void print_usage(const char *program)
 {
     printf("Usage:\n");
@@ -517,6 +528,7 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
     } else {
         fprintf(file, "  \"original_frame\": {\"dump_path\": null, \"dumped\": false},\n");
     }
+    fprintf(file, "  \"frames_json\": \"%s\",\n", config.frames_json_path);
     if (config.latest_jpeg_dump_path) {
         fprintf(file, "  \"latest_jpeg\": {\"dump_path\": \"%s\", \"dumped\": %s},\n",
                 config.latest_jpeg_dump_path,
@@ -823,21 +835,18 @@ void on_frame(const VideoFrame *frame, void *userdata)
                     stats->postprocess_ms_total += result.postprocess_ms;
                     stats->rknn_end_to_end_ms_total += end_to_end_ms;
 
-                    if (context->frame_records && context->frame_record_count < context->frame_record_capacity) {
-                        FrameRecord &record = context->frame_records[context->frame_record_count++];
-                        record.sequence = frame->sequence;
-                        record.ts_ms = monotonic_time_us() / 1000u;
-                        record.preprocess_ms = preprocess_ms;
-                        record.preprocess_decode_ms = decode_ms;
-                        record.preprocess_resize_or_convert_ms = resize_or_convert_ms;
-                        record.inference_ms = result.inference_ms;
-                        record.postprocess_ms = result.postprocess_ms;
-                        record.end_to_end_ms = end_to_end_ms;
-                        record.detections = result.detections_after_nms;
-                        record.top_detection_count = result.detections_after_nms < kFrameRecordMaxDetections ? result.detections_after_nms : kFrameRecordMaxDetections;
-                        for (uint32_t index = 0; index < record.top_detection_count; ++index) {
-                            record.top_detections[index] = result.detections[index];
-                        }
+                    store_frame_result(
+                        context->frame_records,
+                        context->frame_record_capacity,
+                        &context->frame_record_count,
+                        frame->sequence,
+                        preprocess_ms,
+                        decode_ms,
+                        resize_or_convert_ms,
+                        end_to_end_ms,
+                        result);
+                    if (context->frame_records && context->frame_record_count > 0) {
+                        write_frames_json(context->config->frames_json_path, *context->config, context->frame_records, context->frame_record_count);
                     }
                     append_spatial_outputs(
                         *context->config,
@@ -901,8 +910,12 @@ void store_frame_result(
     double end_to_end_ms,
     const RknnFrameResult &result)
 {
-    if (!frame_records || !frame_record_count || *frame_record_count >= frame_record_capacity) {
+    if (!frame_records || !frame_record_count || frame_record_capacity == 0) {
         return;
+    }
+    if (*frame_record_count >= frame_record_capacity) {
+        memmove(frame_records, frame_records + 1, sizeof(FrameRecord) * (frame_record_capacity - 1));
+        *frame_record_count = frame_record_capacity - 1;
     }
     FrameRecord &record = frame_records[(*frame_record_count)++];
     record.sequence = sequence;
@@ -1040,6 +1053,9 @@ void latest_frame_worker(
             resize_or_convert_ms,
             end_to_end_ms,
             frame_result);
+        if (frame_records && frame_record_count && *frame_record_count > 0) {
+            write_frames_json(state->config->frames_json_path, *state->config, frame_records, *frame_record_count);
+        }
         append_spatial_outputs(
             *state->config,
             state->stats,

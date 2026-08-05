@@ -1,73 +1,65 @@
 {
   "zones": [
     {
-      "id": "left_work_area",
-      "name": "Left work area",
+      "id": "doorway_zone",
+      "name": "Doorway / entry zone",
       "polygon_norm": [
-        [0.0, 0.35],
-        [0.42, 0.35],
-        [0.42, 0.92],
-        [0.0, 0.92]
+        [0.0, 0.05],
+        [0.32, 0.05],
+        [0.32, 0.95],
+        [0.0, 0.95]
       ]
     },
     {
-      "id": "screen_area",
-      "name": "Screen area",
+      "id": "tabletop_zone",
+      "name": "Dining table surface",
       "polygon_norm": [
-        [0.42, 0.42],
-        [0.58, 0.42],
-        [0.58, 0.66],
-        [0.42, 0.66]
+        [0.58, 0.38],
+        [0.96, 0.38],
+        [0.96, 0.72],
+        [0.58, 0.72]
+      ]
+    },
+    {
+      "id": "walkway_zone",
+      "name": "Main walkway",
+      "polygon_norm": [
+        [0.28, 0.55],
+        [0.62, 0.55],
+        [0.62, 1.0],
+        [0.28, 1.0]
       ]
     }
   ],
   "rules": [
     {
-      "id": "person_in_left_work_area",
+      "id": "person_at_entry",
       "type": "zone_intersection",
       "class_name": "person",
-      "zone_id": "left_work_area",
+      "zone_id": "doorway_zone",
       "min_confidence": 0.35,
       "severity": "warning",
-      "message": "Person detected inside the left work area."
+      "message": "Person detected near the entry zone."
     },
     {
-      "id": "tv_in_screen_area",
-      "type": "zone_intersection",
-      "class_name": "tv",
-      "zone_id": "screen_area",
-      "min_confidence": 0.35,
-      "severity": "info",
-      "message": "Screen-like object detected in the screen area."
-    },
-    {
-      "id": "chair_in_left_work_area",
-      "type": "zone_intersection",
-      "class_name": "chair",
-      "zone_id": "left_work_area",
-      "min_confidence": 0.3,
-      "severity": "info",
-      "message": "Chair-like object detected inside the left work area."
-    },
-    {
-      "id": "chair_dwells_in_left_work_area",
-      "type": "zone_dwell",
-      "class_name": "chair",
-      "zone_id": "left_work_area",
-      "min_confidence": 0.3,
-      "dwell_ms": 300,
-      "cooldown_ms": 1200,
-      "severity": "info",
-      "message": "Chair-like object stayed inside the left work area."
-    },
-    {
-      "id": "bottle_in_left_work_area",
+      "id": "bottle_on_table",
       "type": "zone_intersection",
       "class_name": "bottle",
-      "zone_id": "left_work_area",
+      "zone_id": "tabletop_zone",
       "min_confidence": 0.25,
       "severity": "warning",
-      "message": "Bottle-like object detected inside the left work area."
+      "message": "Bottle-like object detected on the dining table."
+    },
+    {
+      "id": "chair_blocks_walkway",
+      "type": "zone_dwell",
+      "class_name": "chair",
+      "zone_id": "walkway_zone",
+      "min_confidence": 0.45,
+      "dwell_ms": 3000,
+      "cooldown_ms": 15000,
+      "severity": "warning",
+      "message": "Chair-like object is blocking the main walkway."
     }
   ]
 }

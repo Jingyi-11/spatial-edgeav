@@ -316,6 +316,9 @@ the dashboard exposes it as an HTTP MJPEG stream for browsers. The same page
 draws live zone polygons and detection/event boxes over the stream, shows
 runtime metrics, lists recent spatial events, and turns rule triggers into
 browser actions through Server-Sent Events: popup toast + optional beep sound.
+The active scene rules are documented in [docs/spatial_rules.md](docs/spatial_rules.md);
+the current config focuses on entry-person, table-bottle, and walkway-blocking
+events rather than the older noisy chair-in-left-area demo rule.
 The dashboard service is configured to bind to `127.0.0.1` on the RK3576 board;
 open it from Mac with an SSH tunnel:
 
