@@ -391,3 +391,58 @@ Installation writes into `/etc/spatial-edgeav` and `/etc/systemd/system`, so
 the board prompts for the `kickpi` sudo password. The script uses `ssh -tt`,
 which works from a normal terminal but cannot be completed by non-interactive
 automation without passwordless sudo or an askpass setup.
+
+## C++ Service Long-Run Result
+
+The enabled C++ service was run under systemd for a multi-hour stability test
+and stopped with a one-shot timer:
+
+```bash
+sudo systemd-run --on-active=3h --unit=stop-spatial-edgeav-cpp /bin/systemctl stop spatial-edgeav-cpp.service
+```
+
+The timer fired and stopped the service:
+
+```text
+Active: inactive (dead)
+Duration: 3h 5min 36.965s
+```
+
+Final long-run metrics:
+
+```text
+frames_processed: 331960
+measured_fps: 29.809
+rknn_frames: 189982
+rknn_failures: 0
+spatial_observations: 189982
+spatial_events: 963
+spatial_failures: 0
+rknn_end_to_end_mean: 57.732 ms
+```
+
+After this test, the runtime was updated to handle SIGTERM/SIGINT gracefully.
+The capture loop now exits on a stop request, the latest-frame worker joins,
+and the final heartbeat/report are written with:
+
+```json
+"status": "stopped"
+```
+
+A 20-second `timeout -s TERM` validation confirmed the fix:
+
+```text
+status: stopped
+frames_processed: 573
+measured_fps: 29.935
+rknn_failures: 0
+spatial_failures: 0
+elapsed_ms: 20249.753
+```
+
+This makes the service easier to operate through normal systemd commands:
+
+```bash
+sudo systemctl stop spatial-edgeav-cpp.service
+sudo systemctl restart spatial-edgeav-cpp.service
+```

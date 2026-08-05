@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,28 @@ extern "C" {
 namespace {
 
 constexpr uint32_t kFrameRecordMaxDetections = 20;
+volatile sig_atomic_t g_runtime_stop_requested = 0;
+
+void handle_stop_signal(int)
+{
+    g_runtime_stop_requested = 1;
+    camera_capture_request_stop();
+}
+
+bool runtime_stop_requested()
+{
+    return g_runtime_stop_requested != 0 || camera_capture_stop_requested();
+}
+
+void install_signal_handlers()
+{
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = handle_stop_signal;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGTERM, &action, nullptr);
+    sigaction(SIGINT, &action, nullptr);
+}
 
 struct RuntimeConfig {
     const char *device = "/dev/video0";
@@ -470,7 +493,8 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
     fprintf(file, "  \"bytes_processed\": %llu,\n", static_cast<unsigned long long>(stats.bytes));
     fprintf(file, "  \"last_sequence\": %llu,\n", static_cast<unsigned long long>(stats.last_sequence));
     fprintf(file, "  \"measured_fps\": %.3f,\n", fps_from_stats(stats));
-    fprintf(file, "  \"elapsed_ms\": %.3f,\n", elapsed_ms(stats.start_us, stats.end_us));
+    uint64_t elapsed_end_us = stats.end_us > 0 ? stats.end_us : monotonic_time_us();
+    fprintf(file, "  \"elapsed_ms\": %.3f,\n", elapsed_ms(stats.start_us, elapsed_end_us));
     if (config.rknn_input_dump_path) {
         fprintf(file, "  \"rknn_input\": {\"ready\": %s, \"dump_path\": \"%s\", \"dumped\": %s},\n",
                 stats.rknn_input_ready ? "true" : "false",
@@ -1021,7 +1045,7 @@ int run_simulated(const RuntimeConfig &config, RuntimeStats *stats)
         return -1;
     }
     uint32_t sleep_us = config.fps > 0 ? 1000000u / config.fps : 33333u;
-    for (uint32_t index = 0; index < config.frames; ++index) {
+    for (uint32_t index = 0; !runtime_stop_requested() && (config.frames == 0 || index < config.frames); ++index) {
         uint64_t now = monotonic_time_us();
         VideoFrame frame = {
             data,
@@ -1275,6 +1299,9 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
 
 int main(int argc, char **argv)
 {
+    camera_capture_reset_stop();
+    install_signal_handlers();
+
     RuntimeConfig config;
     if (!parse_args(argc, argv, &config)) {
         print_usage(argv[0]);
@@ -1286,7 +1313,7 @@ int main(int argc, char **argv)
     int result = config.simulate ? run_simulated(config, &stats) : run_v4l2(config, &stats);
     stats.end_us = monotonic_time_us();
     stats.capture_ok = result == 0;
-    const char *status = result == 0 ? "ok" : "error";
+    const char *status = runtime_stop_requested() && result == 0 ? "stopped" : (result == 0 ? "ok" : "error");
 
     write_json(config.heartbeat_path, config, stats, status);
     write_json(config.report_path, config, stats, status);

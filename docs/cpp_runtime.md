@@ -1020,3 +1020,87 @@ target from a terminal where the password prompt can be answered. The C++
 service is intentionally separate from the existing Python
 `spatial-edgeav-rknn.service` so the two services do not silently fight over
 `/dev/video73`.
+
+## Phase 5T: Long-Run Service Test and Graceful Stop
+
+The C++ service passed a long-run board test driven by a one-shot systemd
+timer:
+
+```bash
+sudo systemd-run --on-active=3h --unit=stop-spatial-edgeav-cpp /bin/systemctl stop spatial-edgeav-cpp.service
+```
+
+The timer stopped the service successfully. Verified service result:
+
+```text
+Active: inactive (dead)
+Duration: 3h 5min 36.965s
+Main PID: code=killed, signal=TERM
+```
+
+Last heartbeat from that run:
+
+```json
+{
+  "frames_processed": 331960,
+  "measured_fps": 29.809,
+  "rknn_continuous": {
+    "frames": 189982,
+    "failures": 0,
+    "detections_total": 20794
+  },
+  "spatial": {
+    "observations": 189982,
+    "events": 963,
+    "failures": 0
+  },
+  "latency_ms": {
+    "preprocess_mean": 19.341,
+    "inference_mean": 35.963,
+    "postprocess_mean": 1.200,
+    "rknn_end_to_end_mean": 57.732
+  }
+}
+```
+
+This is the strongest validation so far: camera capture stayed close to 30 FPS,
+RKNN failures stayed at zero, spatial failures stayed at zero, and the service
+ran for multiple hours under systemd.
+
+The test also exposed an operational polish issue: because systemd stopped the
+runtime with SIGTERM, the previous binary could terminate before writing a final
+`stopped` heartbeat/report. The runtime now installs SIGTERM/SIGINT handlers
+and asks the V4L2 capture loop to exit cleanly. `--frames 0` continuous mode
+therefore supports graceful shutdown.
+
+Short verification after the fix:
+
+```text
+timeout -s TERM 20s ./build/edgeav_runtime --frames 0 ...
+edgeav_runtime status=stopped frames=573 fps=29.935
+```
+
+Verified final JSON:
+
+```json
+{
+  "status": "stopped",
+  "frames_processed": 573,
+  "measured_fps": 29.935,
+  "elapsed_ms": 20249.753,
+  "rknn_continuous": {
+    "frames": 331,
+    "failures": 0,
+    "skipped_frames": 242
+  },
+  "spatial": {
+    "observations": 331,
+    "events": 20,
+    "failures": 0
+  }
+}
+```
+
+`elapsed_ms` now also updates correctly in live heartbeat files: while the
+process is running it uses the current monotonic time, and after shutdown it
+uses the final end timestamp.

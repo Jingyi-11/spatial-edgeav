@@ -3,6 +3,7 @@
 #include "camera_capture.h"
 
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,8 @@ typedef struct CameraBuffer {
     size_t length;
 } CameraBuffer;
 
+static volatile sig_atomic_t g_stop_requested = 0;
+
 struct CameraCapture {
     PipelineConfig config;
     int fd;
@@ -29,6 +32,21 @@ struct CameraCapture {
     uint32_t buffer_count;
     uint64_t sequence;
 };
+
+void camera_capture_request_stop(void)
+{
+    g_stop_requested = 1;
+}
+
+void camera_capture_reset_stop(void)
+{
+    g_stop_requested = 0;
+}
+
+int camera_capture_stop_requested(void)
+{
+    return g_stop_requested != 0;
+}
 
 #ifdef __linux__
 static uint32_t v4l2_format(PixelFormat format)
@@ -216,7 +234,7 @@ int camera_capture_frames(CameraCapture *camera, FrameCallback callback, void *u
     }
 
 #ifdef __linux__
-    for (uint32_t captured = 0; camera->config.frames == 0 || captured < camera->config.frames; captured++) {
+    for (uint32_t captured = 0; !camera_capture_stop_requested() && (camera->config.frames == 0 || captured < camera->config.frames); captured++) {
         fd_set descriptors;
         struct timeval timeout;
         FD_ZERO(&descriptors);
@@ -227,6 +245,9 @@ int camera_capture_frames(CameraCapture *camera, FrameCallback callback, void *u
         int ready = select(camera->fd + 1, &descriptors, NULL, NULL, &timeout);
         if (ready == -1) {
             if (errno == EINTR) {
+                if (camera_capture_stop_requested()) {
+                    break;
+                }
                 captured--;
                 continue;
             }
@@ -275,7 +296,7 @@ int camera_capture_frames(CameraCapture *camera, FrameCallback callback, void *u
         return -1;
     }
 
-    for (uint32_t captured = 0; camera->config.frames == 0 || captured < camera->config.frames; captured++) {
+    for (uint32_t captured = 0; !camera_capture_stop_requested() && (camera->config.frames == 0 || captured < camera->config.frames); captured++) {
         fill_simulated_yuyv(data, &camera->config, camera->sequence);
         VideoFrame frame = {
             .data = data,
