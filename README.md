@@ -307,6 +307,20 @@ inside the board-side runtime. Latest verified result: `measured_fps=30.213`,
 dump enabled. `make annotate-cpp-latest-mjpeg-letterbox-original` draws
 `bbox_original_xyxy` detections on the 1280x720 original-frame snapshot.
 
+The project also includes a lightweight web dashboard. It does not require RTSP:
+the C++ service writes the latest camera MJPEG frame as `latest_frame.jpg`, and
+the dashboard exposes it as an HTTP MJPEG stream for browsers. The same page
+polls heartbeat/events, shows runtime metrics, lists recent spatial events, and
+turns rule triggers into browser actions: popup toast + optional beep sound.
+The dashboard service is configured to bind to `127.0.0.1` on the RK3576 board;
+open it from Mac with an SSH tunnel:
+
+```bash
+ssh -N -L 8080:127.0.0.1:8080 rk3576
+```
+
+Then visit `http://127.0.0.1:8080`.
+
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
 ## RK3567/RK3576 Media Scripts

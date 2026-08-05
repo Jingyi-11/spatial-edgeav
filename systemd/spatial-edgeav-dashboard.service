@@ -1,0 +1,24 @@
+[Unit]
+Description=Spatial EdgeAV web dashboard
+After=network-online.target spatial-edgeav-cpp.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kickpi
+Group=kickpi
+WorkingDirectory=/home/kickpi/spatial-edgeav/bin
+EnvironmentFile=/etc/spatial-edgeav/dashboard.env
+ExecStart=/usr/bin/python3 /home/kickpi/spatial-edgeav/bin/edgeav_dashboard_server.py \
+  --host ${EDGEAV_DASHBOARD_HOST} \
+  --port ${EDGEAV_DASHBOARD_PORT} \
+  --run-dir ${EDGEAV_RUN_DIR} \
+  --quiet
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

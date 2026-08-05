@@ -60,6 +60,7 @@ struct RuntimeConfig {
     const char *rknn_report_path = "out/edgeav_rknn_report.json";
     const char *rknn_input_dump_path = nullptr;
     const char *original_frame_dump_path = nullptr;
+    const char *latest_jpeg_dump_path = nullptr;
     const char *frames_json_path = "out/edgeav_runtime_frames.json";
     const char *spatial_rules_path = nullptr;
     const char *observations_jsonl_path = nullptr;
@@ -92,6 +93,7 @@ struct RuntimeStats {
     int rknn_result = 0;
     bool rknn_input_dumped = false;
     bool original_frame_dumped = false;
+    bool latest_jpeg_dumped = false;
     uint64_t rknn_frames = 0;
     uint64_t rknn_failures = 0;
     uint64_t detections_total = 0;
@@ -204,6 +206,7 @@ void print_usage(const char *program)
     printf("  --rknn-report PATH     RKNN tensor/inference JSON report path\n");
     printf("  --rknn-input-dump PATH Write resized RGB RKNN input as PPM when using live YUYV\n");
     printf("  --original-frame-dump PATH Write first original-size RGB camera frame as PPM\n");
+    printf("  --latest-jpeg-dump PATH Write latest MJPEG camera frame for web streaming\n");
     printf("  --rknn-every-frame     Run RKNN on every captured YUYV frame\n");
     printf("  --rknn-latest-frame    Decouple capture and RKNN with a latest-frame worker\n");
     printf("  --rknn-runs N          RKNN measured runs, default 10\n");
@@ -290,6 +293,8 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
             config->rknn_input_dump_path = argv[++index];
         } else if (strcmp(argv[index], "--original-frame-dump") == 0 && index + 1 < argc) {
             config->original_frame_dump_path = argv[++index];
+        } else if (strcmp(argv[index], "--latest-jpeg-dump") == 0 && index + 1 < argc) {
+            config->latest_jpeg_dump_path = argv[++index];
         } else if (strcmp(argv[index], "--rknn-every-frame") == 0) {
             config->rknn_every_frame = true;
         } else if (strcmp(argv[index], "--rknn-latest-frame") == 0) {
@@ -512,6 +517,13 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
     } else {
         fprintf(file, "  \"original_frame\": {\"dump_path\": null, \"dumped\": false},\n");
     }
+    if (config.latest_jpeg_dump_path) {
+        fprintf(file, "  \"latest_jpeg\": {\"dump_path\": \"%s\", \"dumped\": %s},\n",
+                config.latest_jpeg_dump_path,
+                stats.latest_jpeg_dumped ? "true" : "false");
+    } else {
+        fprintf(file, "  \"latest_jpeg\": {\"dump_path\": null, \"dumped\": false},\n");
+    }
     fprintf(file, "  \"rknn_continuous\": {\"enabled\": %s, \"mode\": \"%s\", \"frames\": %llu, \"failures\": %llu, \"skipped_frames\": %llu, \"detections_total\": %llu},\n",
             config.rknn_every_frame ? "true" : "false",
             config.rknn_latest_frame ? "latest_frame_worker" : "synchronous_callback",
@@ -607,6 +619,36 @@ bool write_rgb_ppm(const char *path, const uint8_t *rgb, uint32_t width, uint32_
     bool ok = fwrite(rgb, 1, bytes, file) == bytes;
     fclose(file);
     return ok;
+}
+
+bool write_bytes_atomic(const char *path, const uint8_t *data, size_t size)
+{
+    if (!path || !data || size == 0) {
+        return false;
+    }
+    std::string temp_path = std::string(path) + ".tmp";
+    FILE *file = fopen(temp_path.c_str(), "wb");
+    if (!file) {
+        return false;
+    }
+    bool ok = fwrite(data, 1, size, file) == size;
+    if (fclose(file) != 0) {
+        ok = false;
+    }
+    if (!ok) {
+        unlink(temp_path.c_str());
+        return false;
+    }
+    return rename(temp_path.c_str(), path) == 0;
+}
+
+bool dump_latest_jpeg(const RuntimeConfig &config, RuntimeStats *stats, const VideoFrame *frame)
+{
+    if (!config.latest_jpeg_dump_path || !frame || frame->pixel_format != PIXEL_FORMAT_MJPEG) {
+        return false;
+    }
+    stats->latest_jpeg_dumped = write_bytes_atomic(config.latest_jpeg_dump_path, frame->data, frame->size);
+    return stats->latest_jpeg_dumped;
 }
 
 bool dump_original_frame_ppm(
@@ -719,6 +761,8 @@ void on_frame(const VideoFrame *frame, void *userdata)
     stats->frames++;
     stats->bytes += frame->size;
 
+    dump_latest_jpeg(*context->config, stats, frame);
+
     if (context->config->original_frame_dump_path && !stats->original_frame_dumped) {
         stats->original_frame_dumped = dump_original_frame_ppm(
             context->config->original_frame_dump_path,
@@ -828,6 +872,7 @@ void on_latest_frame(const VideoFrame *frame, void *userdata)
     auto *state = static_cast<LatestFrameState *>(userdata);
     pthread_mutex_lock(&state->mutex);
     record_capture_stats(state->stats, frame);
+    dump_latest_jpeg(*state->config, state->stats, frame);
 
     if (!pixel_format_supported_for_rknn(frame->pixel_format) || frame->size > state->latest_frame_size) {
         pthread_mutex_unlock(&state->mutex);

@@ -29,6 +29,7 @@ ExecStart=/home/kickpi/spatial-edgeav/cpp_runtime_src/build/edgeav_runtime \
   --rknn-model ${EDGEAV_MODEL} \
   --rknn-input-dump ${EDGEAV_ROOT}/runs/cpp_service/last_rknn_input.ppm \
   --original-frame-dump ${EDGEAV_ROOT}/runs/cpp_service/last_original_frame.ppm \
+  --latest-jpeg-dump ${EDGEAV_ROOT}/runs/cpp_service/latest_frame.jpg \
   --rknn-latest-frame
 Restart=always
 RestartSec=3
