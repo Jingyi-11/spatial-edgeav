@@ -291,7 +291,9 @@ INDEX_HTML = """<!doctype html>
     let zones = [];
     let detections = [];
     let recentEvents = [];
+    let latestSequence = null;
     let streamShape = { width: 1280, height: 720 };
+    const EVENT_HIGHLIGHT_FRAME_TTL = 90;
 
     function fmt(value, digits = 1) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
@@ -389,6 +391,10 @@ INDEX_HTML = """<!doctype html>
         const obj = ev.object || {};
         const box = obj.bbox_original_xyxy;
         if (!box || box.length !== 4) continue;
+        if (latestSequence !== null && ev.frame_index !== undefined) {
+          const ageFrames = Number(latestSequence) - Number(ev.frame_index);
+          if (ageFrames < 0 || ageFrames > EVENT_HIGHLIGHT_FRAME_TTL) continue;
+        }
         const [x1, y1] = scalePoint(Number(box[0]), Number(box[1]), canvas);
         const [x2, y2] = scalePoint(Number(box[2]), Number(box[3]), canvas);
         ctx.strokeStyle = "rgb(251 191 36 / 0.98)";
@@ -416,6 +422,7 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/latest-detections", { cache: "no-store" });
         const data = await res.json();
         detections = data.detections || [];
+        latestSequence = data.sequence === undefined || data.sequence === null ? latestSequence : Number(data.sequence);
         if (data.frame && data.frame.width && data.frame.height) {
           streamShape = data.frame;
         }
@@ -515,6 +522,7 @@ INDEX_HTML = """<!doctype html>
     loadEvents();
     connectEvents();
     setInterval(loadHeartbeat, 1000);
+    setInterval(loadSpatialConfig, 5000);
     setInterval(loadDetections, 700);
     window.addEventListener("resize", drawOverlay);
   </script>

@@ -31,6 +31,23 @@ y = 0.38 * 720  = 274
 
 This keeps the config portable if the camera resolution changes.
 
+If the camera is physically moved or rotated, the zones do not automatically
+follow the room objects. They are image-coordinate regions, so the correct
+workflow is:
+
+```text
+move camera
+  -> open dashboard
+  -> estimate new normalized zone coordinates
+  -> edit configs/spatial_rules.json
+  -> redeploy/restart the C++ service
+```
+
+The dashboard reloads `/api/spatial-config` every 5 seconds, so visual zone
+overlays update after the config changes. The C++ spatial-rule engine still
+loads the rules at service startup, so actual event semantics require restarting
+`spatial-edgeav-cpp.service`.
+
 ## Current Scene Rules
 
 The current config is tuned for the room visible in the dashboard:
@@ -98,3 +115,11 @@ sudo systemctl restart spatial-edgeav-dashboard.service
 ```
 
 Then hard refresh the browser page.
+
+## Event Highlight TTL
+
+The dashboard keeps recent events in the right-side list, but the yellow bbox
+highlight on top of the video is intentionally short-lived. It only draws events
+whose `frame_index` is within about 90 frames of the latest detection frame,
+roughly 3 seconds at 30 FPS. This prevents old event boxes from remaining on top
+of a moved camera view.
