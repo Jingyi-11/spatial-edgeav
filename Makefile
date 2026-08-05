@@ -16,7 +16,7 @@ OBJECTS := $(SOURCES:src/%.c=$(BUILD_DIR)/%.o)
 RUNTIME_C_OBJECTS := $(BUILD_DIR)/pipeline.o $(BUILD_DIR)/camera_capture.o $(BUILD_DIR)/yuv.o
 RUNTIME_CPP_OBJECTS := $(BUILD_DIR)/edgeav_runtime.o $(BUILD_DIR)/rknn_detector.o
 
-.PHONY: all clean run-sim probe rk3567-sim edgeav-runtime run-edgeav-runtime-sim deploy-cpp-runtime-board run-cpp-live-yuyv-board run-cpp-continuous-yuyv-board run-cpp-latest-yuyv-board annotate-cpp-live-yuyv annotate-cpp-continuous-yuyv annotate-cpp-latest-yuyv edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board deploy-onnx-cpu-board deploy-rknn-service-board install-rknn-health-timer-board collect-rknn-service-snapshot profile-rknn-service check-rknn-service-health run-rknn-camera-board evaluate-rknn-camera-events benchmark-matrix compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
+.PHONY: all clean run-sim probe rk3567-sim edgeav-runtime run-edgeav-runtime-sim deploy-cpp-runtime-board run-cpp-capture-yuyv-board run-cpp-capture-mjpeg-board run-cpp-live-yuyv-board run-cpp-continuous-yuyv-board run-cpp-latest-yuyv-board annotate-cpp-live-yuyv annotate-cpp-continuous-yuyv annotate-cpp-latest-yuyv edgeav-smoke setup-rknn-wsl export-onnx download-rockchip-yolov8n collect-rknn-calib collect-rknn-calib-board convert-rknn-fp convert-rknn-i8 setup-rknn-converter-board convert-rknn-i8-board convert-rockchip-yolov8n-i8-board setup-rknn-board deploy-rknn-board deploy-rknn-board-i8 deploy-rockchip-yolov8n-i8-board deploy-onnx-cpu-board deploy-rknn-service-board install-rknn-health-timer-board collect-rknn-service-snapshot profile-rknn-service check-rknn-service-health run-rknn-camera-board evaluate-rknn-camera-events benchmark-matrix compare-rknn-benchmarks compare-rknn-detections compare-rockchip-i8-detections
 
 all: $(TARGET)
 
@@ -45,6 +45,18 @@ run-edgeav-runtime-sim: $(EDGEAV_RUNTIME_TARGET) out
 
 deploy-cpp-runtime-board:
 	bash scripts/deploy_cpp_runtime_to_rk3576.sh
+
+run-cpp-capture-yuyv-board:
+	mkdir -p runs/rk3576_cpp_runtime
+	ssh rk3576 "cd /home/kickpi/spatial-edgeav/cpp_runtime_src && ./build/edgeav_runtime --device /dev/video73 --width 1280 --height 720 --fps 30 --frames 120 --format YUYV --report /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_capture_yuyv_report.json --heartbeat /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_capture_yuyv_heartbeat.json"
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_capture_yuyv_report.json runs/rk3576_cpp_runtime/
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_capture_yuyv_heartbeat.json runs/rk3576_cpp_runtime/
+
+run-cpp-capture-mjpeg-board:
+	mkdir -p runs/rk3576_cpp_runtime
+	ssh rk3576 "cd /home/kickpi/spatial-edgeav/cpp_runtime_src && ./build/edgeav_runtime --device /dev/video73 --width 1280 --height 720 --fps 30 --frames 120 --format MJPEG --report /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_capture_mjpeg_report.json --heartbeat /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_capture_mjpeg_heartbeat.json"
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_capture_mjpeg_report.json runs/rk3576_cpp_runtime/
+	scp rk3576:/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_capture_mjpeg_heartbeat.json runs/rk3576_cpp_runtime/
 
 run-cpp-live-yuyv-board:
 	mkdir -p runs/rk3576_cpp_runtime

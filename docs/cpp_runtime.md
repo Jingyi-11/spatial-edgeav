@@ -470,6 +470,54 @@ benefit of this architecture becomes more important when capture moves to a
 higher-FPS MJPEG/GStreamer/RGA path: old frames can be dropped instead of
 building latency in a queue, keeping inference aligned with the newest scene.
 
+## Phase 5K: Capture-Only YUYV vs MJPEG Input Benchmark
+
+Before adding MJPEG decode to the inference path, the runtime now measures
+camera input throughput without RKNN:
+
+```bash
+make run-cpp-capture-yuyv-board
+make run-cpp-capture-mjpeg-board
+```
+
+These targets run the same C/C++ V4L2 capture loop for 120 frames and do not run
+preprocess, RKNN inference, or postprocess. This isolates the USB/camera input
+rate from model compute.
+
+Verified RK3576 capture-only result:
+
+```text
+YUYV 1280x720, 120 frames:
+  measured FPS: 9.980
+  bytes processed: 221184000
+  bytes per frame: 1843200
+
+MJPEG 1280x720, 120 frames:
+  measured FPS: 29.900
+  bytes processed: 22786752
+  bytes per frame: 189890
+```
+
+This confirms that the C920/RK3576 input bottleneck is format-dependent. YUYV is
+uncompressed and moves about 1.84 MB per 720p frame, so the camera effectively
+delivers around 10 FPS in this mode. MJPEG compresses each frame to roughly
+190 KB in the tested scene and reaches the requested 30 FPS capture rate.
+
+The next step is not to send MJPEG directly to the NPU. The RKNN model still
+expects an RGB/NHWC 640x640 tensor. The needed runtime path is:
+
+```text
+V4L2 MJPEG frame
+  -> JPEG decode through GStreamer/libjpeg/hardware plugin
+  -> resize/color convert through CPU or RGA
+  -> RKNN NPU inference
+  -> C++ YOLOv8 postprocess
+```
+
+The capture-only benchmark proves that MJPEG is worth integrating because it
+fixes the input-rate side of the pipeline. Decode and RGA work will decide how
+much of that 30 FPS can be preserved after preprocessing and inference.
+
 Before running the live C++ camera test again, stop the Python service that owns
 the camera device, then restart it after the test:
 

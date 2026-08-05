@@ -222,6 +222,8 @@ make run-cpp-continuous-yuyv-board
 make annotate-cpp-continuous-yuyv
 make run-cpp-latest-yuyv-board
 make annotate-cpp-latest-yuyv
+make run-cpp-capture-yuyv-board
+make run-cpp-capture-mjpeg-board
 ```
 
 This converts a captured YUYV frame into an RGB `640x640` RKNN input tensor and
@@ -251,6 +253,12 @@ YUYV result: `frames=30`, `rknn_frames=30`, `skipped_frames=0`,
 `detections_total=68`, `preprocess_mean=11.814 ms`,
 `inference_mean=36.768 ms`, `postprocess_mean=21.232 ms`,
 `rknn_end_to_end_mean=71.375 ms`.
+
+Capture-only input benchmark separates camera/USB throughput from inference:
+YUYV `1280x720@30 requested` measured `9.980 FPS` with about `1.84 MB/frame`,
+while MJPEG measured `29.900 FPS` with about `190 KB/frame`. This confirms that
+MJPEG can remove the current YUYV input-rate bottleneck before adding decode and
+RGA preprocessing.
 
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
