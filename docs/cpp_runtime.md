@@ -814,6 +814,7 @@ The project now has a board-side media acceleration probe:
 
 ```bash
 make probe-media-accel-board
+make benchmark-gst-rga-preprocess-board
 ```
 
 Verified RK3576 probe result:
@@ -859,6 +860,10 @@ Interpretation:
   `--preprocess-backend cpu|rga`.
 - The safest next engineering step is to add RGA as an optional backend while
   keeping the current CPU path as the reference implementation.
+- `benchmark-gst-rga-preprocess-board` writes
+  `runs/rk3576_media_accel/gstreamer_rga_preprocess_report.json`, including
+  software GStreamer throughput, Rockchip hardware element candidates, and RGA
+  device/library status.
 
 Before running the live C++ camera test again, stop the Python service that owns
 the camera device, then restart it after the test:

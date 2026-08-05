@@ -296,6 +296,9 @@ probe-media-accel-board` verifies GStreamer 1.24.2, `gstreamer-app-1.0`, RGA
 `v4l2src ! jpegdec ! videoscale ! fakesink` benchmark at `22.945 FPS` for 120
 frames. This is now the measured baseline before replacing CPU resize/decode
 with a GStreamer appsink or RGA-backed preprocessing path.
+`make benchmark-gst-rga-preprocess-board` records a JSON readiness/benchmark
+report under `runs/rk3576_media_accel/`, including software GStreamer throughput,
+Rockchip hardware element candidates, and RGA device/library availability.
 
 The C/C++ runtime now also owns the spatial-event path. `make
 run-cpp-latest-mjpeg-letterbox-spatial-board` runs USB camera capture, MJPEG
@@ -310,8 +313,9 @@ dump enabled. `make annotate-cpp-latest-mjpeg-letterbox-original` draws
 The project also includes a lightweight web dashboard. It does not require RTSP:
 the C++ service writes the latest camera MJPEG frame as `latest_frame.jpg`, and
 the dashboard exposes it as an HTTP MJPEG stream for browsers. The same page
-polls heartbeat/events, shows runtime metrics, lists recent spatial events, and
-turns rule triggers into browser actions: popup toast + optional beep sound.
+draws live zone polygons and detection/event boxes over the stream, shows
+runtime metrics, lists recent spatial events, and turns rule triggers into
+browser actions through Server-Sent Events: popup toast + optional beep sound.
 The dashboard service is configured to bind to `127.0.0.1` on the RK3576 board;
 open it from Mac with an SSH tunnel:
 

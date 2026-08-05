@@ -6,6 +6,8 @@ board-local C++ runtime:
   - heartbeat.json
   - events.jsonl
   - latest_frame.jpg
+  - edgeav_runtime_frames.json
+  - spatial_rules.json
 """
 
 from __future__ import annotations
@@ -89,6 +91,15 @@ INDEX_HTML = """<!doctype html>
       align-items: center;
       justify-content: center;
     }
+    .video-stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #020617;
+    }
     #stream {
       width: 100%;
       height: auto;
@@ -96,6 +107,13 @@ INDEX_HTML = """<!doctype html>
       aspect-ratio: 16 / 9;
       object-fit: contain;
       background: #020617;
+    }
+    #overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
     }
     .video-title {
       position: absolute;
@@ -230,8 +248,11 @@ INDEX_HTML = """<!doctype html>
   <main>
     <section>
       <div class="video-wrap">
-        <div class="video-title">Live camera stream: HTTP MJPEG from RK3576 C++ service</div>
-        <img id="stream" src="/stream.mjpg" alt="Live camera stream">
+        <div class="video-title">Live camera stream: HTTP MJPEG + spatial overlay</div>
+        <div class="video-stage">
+          <img id="stream" src="/stream.mjpg" alt="Live camera stream">
+          <canvas id="overlay"></canvas>
+        </div>
       </div>
     </section>
     <div class="side">
@@ -267,6 +288,10 @@ INDEX_HTML = """<!doctype html>
     let audioEnabled = false;
     let lastEventId = localStorage.getItem("edgeav:lastEventId") || "";
     let audioCtx = null;
+    let zones = [];
+    let detections = [];
+    let recentEvents = [];
+    let streamShape = { width: 1280, height: 720 };
 
     function fmt(value, digits = 1) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
@@ -297,6 +322,109 @@ INDEX_HTML = """<!doctype html>
       setTimeout(() => toast.classList.remove("show"), 5500);
     }
 
+    function scalePoint(x, y, canvas) {
+      return [x * canvas.width / streamShape.width, y * canvas.height / streamShape.height];
+    }
+
+    function drawOverlay() {
+      const canvas = document.getElementById("overlay");
+      const img = document.getElementById("stream");
+      const rect = img.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const cssWidth = Math.max(1, Math.round(rect.width));
+      const cssHeight = Math.max(1, Math.round(rect.height));
+      const targetWidth = Math.round(cssWidth * dpr);
+      const targetHeight = Math.round(cssHeight * dpr);
+      if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        canvas.style.width = `${cssWidth}px`;
+        canvas.style.height = `${cssHeight}px`;
+      }
+
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = Math.max(2, 2 * dpr);
+      ctx.font = `${Math.max(12, 12 * dpr)}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+
+      for (const zone of zones) {
+        const points = zone.polygon_xy || [];
+        if (points.length < 3) continue;
+        ctx.beginPath();
+        points.forEach((pt, idx) => {
+          const [x, y] = scalePoint(Number(pt[0]), Number(pt[1]), canvas);
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.closePath();
+        ctx.fillStyle = "rgb(56 189 248 / 0.12)";
+        ctx.strokeStyle = "rgb(56 189 248 / 0.85)";
+        ctx.fill();
+        ctx.stroke();
+
+        const [lx, ly] = scalePoint(Number(points[0][0]), Number(points[0][1]), canvas);
+        const label = zone.name || zone.id || "zone";
+        ctx.fillStyle = "rgb(2 6 23 / 0.72)";
+        ctx.fillRect(lx, Math.max(0, ly - 20 * dpr), Math.min(260 * dpr, label.length * 8 * dpr + 18 * dpr), 20 * dpr);
+        ctx.fillStyle = "rgb(226 232 240)";
+        ctx.fillText(label, lx + 6 * dpr, Math.max(14 * dpr, ly - 6 * dpr));
+      }
+
+      for (const det of detections.slice(0, 12)) {
+        const box = det.bbox_original_xyxy || det.bbox_xyxy;
+        if (!box || box.length !== 4) continue;
+        const [x1, y1] = scalePoint(Number(box[0]), Number(box[1]), canvas);
+        const [x2, y2] = scalePoint(Number(box[2]), Number(box[3]), canvas);
+        const label = `${det.class_name || det.class_id || "obj"} ${det.confidence ? Number(det.confidence).toFixed(2) : ""}`;
+        ctx.strokeStyle = "rgb(52 211 153 / 0.95)";
+        ctx.fillStyle = "rgb(52 211 153 / 0.16)";
+        ctx.lineWidth = Math.max(2, 2 * dpr);
+        ctx.strokeRect(x1, y1, Math.max(1, x2 - x1), Math.max(1, y2 - y1));
+        ctx.fillRect(x1, Math.max(0, y1 - 20 * dpr), Math.min(220 * dpr, label.length * 8 * dpr + 16 * dpr), 20 * dpr);
+        ctx.fillStyle = "#052e1f";
+        ctx.fillText(label, x1 + 5 * dpr, Math.max(14 * dpr, y1 - 6 * dpr));
+      }
+
+      for (const ev of recentEvents.slice(-8)) {
+        const obj = ev.object || {};
+        const box = obj.bbox_original_xyxy;
+        if (!box || box.length !== 4) continue;
+        const [x1, y1] = scalePoint(Number(box[0]), Number(box[1]), canvas);
+        const [x2, y2] = scalePoint(Number(box[2]), Number(box[3]), canvas);
+        ctx.strokeStyle = "rgb(251 191 36 / 0.98)";
+        ctx.lineWidth = Math.max(3, 3 * dpr);
+        ctx.strokeRect(x1, y1, Math.max(1, x2 - x1), Math.max(1, y2 - y1));
+      }
+    }
+
+    async function loadSpatialConfig() {
+      try {
+        const res = await fetch("/api/spatial-config", { cache: "no-store" });
+        const data = await res.json();
+        zones = data.zones || [];
+        if (data.frame && data.frame.width && data.frame.height) {
+          streamShape = data.frame;
+        }
+        drawOverlay();
+      } catch (err) {
+        zones = [];
+      }
+    }
+
+    async function loadDetections() {
+      try {
+        const res = await fetch("/api/latest-detections", { cache: "no-store" });
+        const data = await res.json();
+        detections = data.detections || [];
+        if (data.frame && data.frame.width && data.frame.height) {
+          streamShape = data.frame;
+        }
+        drawOverlay();
+      } catch (err) {
+        detections = [];
+      }
+    }
+
     async function loadHeartbeat() {
       try {
         const res = await fetch("/api/heartbeat", { cache: "no-store" });
@@ -322,29 +450,53 @@ INDEX_HTML = """<!doctype html>
       try {
         const res = await fetch("/api/events?limit=20", { cache: "no-store" });
         const events = await res.json();
-        const box = document.getElementById("events");
-        box.innerHTML = events.slice().reverse().map(ev => {
-          const obj = ev.object || {};
-          return `<div class="event">
-            <div class="event-top"><code>${ev.rule_id || "-"}</code><span>${obj.confidence ? Number(obj.confidence).toFixed(2) : ""}</span></div>
-            <p>${ev.message || ""}</p>
-            <p>${obj.class_name || "object"} · frame ${ev.frame_index ?? "-"} · object ${obj.object_id ?? "-"}</p>
-          </div>`;
-        }).join("") || `<div class="event"><p>No events yet.</p></div>`;
-
-        const newest = events.length ? events[events.length - 1] : null;
-        if (newest && newest.event_id && newest.event_id !== lastEventId) {
-          if (lastEventId) {
-            showToast(newest);
-            beep();
-          }
-          lastEventId = newest.event_id;
-          localStorage.setItem("edgeav:lastEventId", lastEventId);
-        }
-        document.getElementById("eventState").textContent = "ok";
+        renderEvents(events, "polling");
       } catch (err) {
         document.getElementById("eventState").textContent = "error";
       }
+    }
+
+    function renderEvents(events, stateLabel = "ok") {
+      recentEvents = events;
+      const box = document.getElementById("events");
+      box.innerHTML = events.slice().reverse().map(ev => {
+        const obj = ev.object || {};
+        return `<div class="event">
+          <div class="event-top"><code>${ev.rule_id || "-"}</code><span>${obj.confidence ? Number(obj.confidence).toFixed(2) : ""}</span></div>
+          <p>${ev.message || ""}</p>
+          <p>${obj.class_name || "object"} · frame ${ev.frame_index ?? "-"} · object ${obj.object_id ?? "-"}</p>
+        </div>`;
+      }).join("") || `<div class="event"><p>No events yet.</p></div>`;
+
+      const newest = events.length ? events[events.length - 1] : null;
+      if (newest && newest.event_id && newest.event_id !== lastEventId) {
+        if (lastEventId) {
+          showToast(newest);
+          beep();
+        }
+        lastEventId = newest.event_id;
+        localStorage.setItem("edgeav:lastEventId", lastEventId);
+      }
+      document.getElementById("eventState").textContent = stateLabel;
+      drawOverlay();
+    }
+
+    function connectEvents() {
+      if (!window.EventSource) {
+        setInterval(loadEvents, 1000);
+        return;
+      }
+      const source = new EventSource("/events.sse");
+      source.addEventListener("events", (msg) => {
+        try {
+          renderEvents(JSON.parse(msg.data), "sse");
+        } catch (err) {
+          document.getElementById("eventState").textContent = "parse error";
+        }
+      });
+      source.onerror = () => {
+        document.getElementById("eventState").textContent = "reconnecting";
+      };
     }
 
     document.getElementById("enableAudio").addEventListener("click", () => {
@@ -358,9 +510,13 @@ INDEX_HTML = """<!doctype html>
     });
 
     loadHeartbeat();
+    loadSpatialConfig();
+    loadDetections();
     loadEvents();
+    connectEvents();
     setInterval(loadHeartbeat, 1000);
-    setInterval(loadEvents, 1000);
+    setInterval(loadDetections, 700);
+    window.addEventListener("resize", drawOverlay);
   </script>
 </body>
 </html>
@@ -405,6 +561,67 @@ class DashboardHandler(BaseHTTPRequestHandler):
             pass
         return self.run_dir / "latest_frame.jpg"
 
+    def events_path(self) -> Path:
+        heartbeat_path = self.run_dir / "heartbeat.json"
+        try:
+            heartbeat = self.read_json(heartbeat_path)
+            events = heartbeat.get("spatial", {}).get("events_jsonl")  # type: ignore[union-attr]
+            if events:
+                return Path(str(events))
+        except Exception:
+            pass
+        return self.run_dir / "events.jsonl"
+
+    def frames_path(self) -> Path:
+        heartbeat_path = self.run_dir / "heartbeat.json"
+        try:
+            heartbeat = self.read_json(heartbeat_path)
+            frames = heartbeat.get("frames_json")  # type: ignore[union-attr]
+            if frames:
+                return Path(str(frames))
+        except Exception:
+            pass
+        return self.run_dir / "edgeav_runtime_frames.json"
+
+    def spatial_rules_path(self) -> Path | None:
+        heartbeat_path = self.run_dir / "heartbeat.json"
+        try:
+            heartbeat = self.read_json(heartbeat_path)
+            rules = heartbeat.get("spatial", {}).get("rules")  # type: ignore[union-attr]
+            if rules:
+                return Path(str(rules))
+        except Exception:
+            pass
+        default_path = Path("/home/kickpi/spatial-edgeav/configs/spatial_rules.json")
+        return default_path if default_path.exists() else None
+
+    def frame_shape(self) -> dict[str, int]:
+        heartbeat_path = self.run_dir / "heartbeat.json"
+        try:
+            heartbeat = self.read_json(heartbeat_path)
+            camera = heartbeat.get("camera", {})  # type: ignore[union-attr]
+            return {
+                "width": int(camera.get("width", 1280)),
+                "height": int(camera.get("height", 720)),
+            }
+        except Exception:
+            return {"width": 1280, "height": 720}
+
+    def read_events(self, limit: int) -> list[dict[str, object]]:
+        path = self.events_path()
+        if not path.exists():
+            return []
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        events: list[dict[str, object]] = []
+        for line in lines[-max(1, min(limit, 200)):]:
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                events.append(item)
+        return events
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/":
@@ -415,6 +632,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             limit = int(query.get("limit", ["20"])[0])
             self.handle_events(limit)
+        elif parsed.path == "/api/spatial-config":
+            self.handle_spatial_config()
+        elif parsed.path == "/api/latest-detections":
+            self.handle_latest_detections()
+        elif parsed.path == "/events.sse":
+            query = parse_qs(parsed.query)
+            limit = int(query.get("limit", ["20"])[0])
+            self.handle_events_sse(limit)
         elif parsed.path == "/snapshot.jpg":
             self.handle_snapshot()
         elif parsed.path == "/stream.mjpg":
@@ -433,18 +658,75 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json({"status": "error", "error": str(exc)}, 500)
 
     def handle_events(self, limit: int) -> None:
-        path = self.run_dir / "events.jsonl"
-        if not path.exists():
-            self.send_json([])
+        self.send_json(self.read_events(limit))
+
+    def handle_spatial_config(self) -> None:
+        path = self.spatial_rules_path()
+        if not path or not path.exists():
+            self.send_json({"frame": self.frame_shape(), "zones": [], "rules": []})
             return
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        events = []
-        for line in lines[-max(1, min(limit, 200)):]:
+        try:
+            config = self.read_json(path)
+            frame = self.frame_shape()
+            zones = []
+            for zone in config.get("zones", []):  # type: ignore[union-attr]
+                polygon_norm = zone.get("polygon_norm", [])
+                polygon_xy = [
+                    [float(x) * frame["width"], float(y) * frame["height"]]
+                    for x, y in polygon_norm
+                ]
+                zones.append({
+                    "id": zone.get("id"),
+                    "name": zone.get("name", zone.get("id")),
+                    "polygon_norm": polygon_norm,
+                    "polygon_xy": polygon_xy,
+                })
+            self.send_json({"frame": frame, "zones": zones, "rules": config.get("rules", [])})  # type: ignore[union-attr]
+        except Exception as exc:
+            self.send_json({"status": "error", "error": str(exc)}, 500)
+
+    def handle_latest_detections(self) -> None:
+        path = self.frames_path()
+        if not path.exists():
+            self.send_json({"frame": self.frame_shape(), "detections": []})
+            return
+        try:
+            frames = self.read_json(path)
+            if not isinstance(frames, list) or not frames:
+                self.send_json({"frame": self.frame_shape(), "detections": []})
+                return
+            latest = frames[-1]
+            self.send_json({
+                "frame": self.frame_shape(),
+                "sequence": latest.get("sequence"),
+                "ts_ms": latest.get("ts_ms"),
+                "detections": latest.get("detections", []),
+            })
+        except Exception as exc:
+            self.send_json({"status": "error", "error": str(exc)}, 500)
+
+    def handle_events_sse(self, limit: int) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        last_payload = ""
+        while True:
             try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        self.send_json(events)
+                payload = json.dumps(self.read_events(limit), ensure_ascii=False)
+                if payload != last_payload:
+                    self.wfile.write(b"event: events\n")
+                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                    last_payload = payload
+                else:
+                    self.wfile.write(b": heartbeat\n\n")
+                    self.wfile.flush()
+                time.sleep(1.0)
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
     def handle_snapshot(self) -> None:
         path = self.latest_frame_path()

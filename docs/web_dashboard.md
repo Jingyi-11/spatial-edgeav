@@ -6,9 +6,10 @@ The project can expose visual/event outputs in several ways:
 
 | Option | Main purpose | Fit for this project |
 | --- | --- | --- |
-| Web dashboard | Human-facing UI for video, health, and events | Best MVP/demo path |
+| Web dashboard | Human-facing UI for video, health, and events | Implemented demo path |
 | HTTP MJPEG | Browser-friendly live video stream | Implemented |
-| WebSocket | Push events to browser instantly | Future upgrade; current page polls every second |
+| SSE | Push one-way events to browser instantly | Implemented for spatial events |
+| WebSocket | Bidirectional browser/device messages | Future upgrade if live control is needed |
 | RTSP | Standard video stream for VLC/NVR systems | Useful later, not required for browser dashboard |
 | MQTT | IoT/event bus for device-to-device actions | Future integration for external systems |
 | Grafana | Long-term metrics and operations dashboard | Future integration for 24h/7d monitoring |
@@ -22,6 +23,7 @@ C++ service writes latest_frame.jpg
   -> Python dashboard reads latest_frame.jpg
   -> /stream.mjpg sends multipart JPEG frames
   -> browser <img> shows live video
+  -> canvas overlays zones, detections, and event bboxes
 ```
 
 This is simpler than RTSP and fits the current C920 MJPEG camera path.
@@ -35,7 +37,7 @@ Current action chain:
 ```text
 spatial rule triggered
   -> append event to events.jsonl
-  -> dashboard polls /api/events
+  -> dashboard pushes event list through /events.sse
   -> browser popup toast
   -> optional browser beep sound
   -> event remains in the recent-events list
@@ -53,6 +55,8 @@ The dashboard reads the C++ service run directory:
 /home/kickpi/spatial-edgeav/runs/cpp_service/heartbeat.json
 /home/kickpi/spatial-edgeav/runs/cpp_service/events.jsonl
 /home/kickpi/spatial-edgeav/runs/cpp_service/latest_frame.jpg
+/home/kickpi/spatial-edgeav/runs/cpp_service/edgeav_runtime_frames.json
+/home/kickpi/spatial-edgeav/configs/spatial_rules.json
 ```
 
 `heartbeat.json` drives runtime cards:
@@ -66,6 +70,26 @@ The dashboard reads the C++ service run directory:
 `events.jsonl` drives the recent-event list, popup action, and sound action.
 
 `latest_frame.jpg` drives the live video stream.
+
+`edgeav_runtime_frames.json` drives the latest detection boxes. The dashboard
+uses `bbox_original_xyxy` when available so the overlay aligns with the
+1280x720 camera image rather than the model's 640x640 input.
+
+`spatial_rules.json` drives the zone overlay. The dashboard converts
+`polygon_norm` coordinates into original-frame pixels using the camera width and
+height reported in `heartbeat.json`.
+
+## Dashboard API
+
+```text
+/stream.mjpg             HTTP MJPEG live video stream
+/events.sse              Server-Sent Events stream for recent spatial events
+/api/heartbeat           service health and latency counters
+/api/events?limit=20     polling fallback for spatial events
+/api/spatial-config      zones/rules converted for overlay drawing
+/api/latest-detections   latest C++ runtime detections for bbox overlay
+/snapshot.jpg            current frame still image
+```
 
 ## Security Model
 
@@ -114,13 +138,37 @@ ENABLE_SERVICE=1 START_SERVICE=1 make deploy-dashboard-board
 Both installation targets write to `/etc/systemd/system`, so the board will ask
 for the `kickpi` sudo password.
 
+## GStreamer/RGA Preprocessing Gate
+
+The current live runtime still uses the stable C/C++ path:
+
+```text
+V4L2 MJPEG -> libjpeg decode -> CPU letterbox resize -> RKNN NPU
+```
+
+The repo now includes a board-side benchmark gate for the next hardware
+preprocessing step:
+
+```bash
+make benchmark-gst-rga-preprocess-board
+```
+
+It records:
+
+- software GStreamer decode/scale throughput
+- Rockchip hardware GStreamer element candidates such as MPP/RGA plugins
+- `/dev/rga` and `librga` availability
+- a JSON report under `runs/rk3576_media_accel/`
+
+This keeps the production runtime honest: hardware preprocessing is only
+promoted into the hot path after the board proves the needed plugins/devices are
+present and faster than the CPU reference.
+
 ## Future Upgrades
 
-- Add WebSocket or Server-Sent Events to push event notifications without
-  polling.
-- Draw live bbox/zone overlays in the browser by pairing detections with the
-  latest frame timestamp.
 - Add MQTT publish for external IoT actions.
 - Add RTSP if integration with VLC/NVR/video monitoring systems is required.
 - Export Prometheus metrics and build a Grafana dashboard for long-duration
   performance monitoring.
+- Promote RGA/GStreamer preprocessing from benchmark gate into the C/C++ runtime
+  after board-side plugin validation.
