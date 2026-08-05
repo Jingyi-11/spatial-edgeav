@@ -261,13 +261,22 @@ MJPEG can remove the current YUYV input-rate bottleneck before adding decode and
 RGA preprocessing.
 
 MJPEG is now integrated into the C/C++ RKNN runtime with board-side `libjpeg`
-decode. Verified latest-frame MJPEG result on RK3576: `frames=30`,
-`measured_fps=30.218`, `rknn_frames=15`, `skipped_frames=15`, `failures=0`,
-`detections_total=36`, `preprocess_mean=17.425 ms`,
-`inference_mean=33.937 ms`, `postprocess_mean=16.381 ms`, and
-`rknn_end_to_end_mean=69.199 ms`. The skip count is expected in latest-frame
+decode. After CPU-path optimization, verified latest-frame MJPEG result on
+RK3576: `frames=30`, `measured_fps=30.215`, `rknn_frames=19`,
+`skipped_frames=11`, `failures=0`, `preprocess_mean=14.238 ms`
+(`decode_mean=9.853 ms`, `resize_or_convert_mean=4.372 ms`),
+`inference_mean=36.506 ms`, `postprocess_mean=1.523 ms`, and
+`rknn_end_to_end_mean=54.141 ms`. The skip count is expected in latest-frame
 mode: camera input stays real-time while the worker drops stale frames instead
 of building queue latency.
+
+The 1280x720 camera frame is resized to 640x640 because the deployed YOLOv8n
+RKNN model is a static-shape 640x640 model, and the YOLOv8 decode path uses the
+same 640 image-size coordinate system. A future quality improvement is
+letterbox preprocessing so 16:9 camera frames are not geometrically stretched.
+Dynamic shape is possible as a future experiment, but it requires a dynamic
+ONNX/RKNN export, runtime shape handling, per-shape YOLO decode/bbox mapping,
+and new performance validation.
 
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 

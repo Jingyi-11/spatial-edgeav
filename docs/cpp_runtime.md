@@ -562,7 +562,29 @@ USB camera /dev/video73
   -> JSON report + annotated PPM
 ```
 
-Verified RK3576 MJPEG latest-frame result:
+Why the runtime resizes to 640x640:
+
+- The deployed YOLOv8n/RKNN model was exported and compiled with a static
+  640x640 input tensor. RKNN static-shape models expect the runtime input buffer
+  to match that compiled shape.
+- YOLOv8 postprocess is also tied to that image size through feature-map grids,
+  strides, and DFL box decoding. In this runtime `kYoloImageSize` is 640, so
+  decoded boxes are expressed in the model's 640x640 coordinate system.
+- The camera can capture 1280x720, but that is the sensor/frame format, not the
+  model tensor format. The bridge between them is preprocessing: decode,
+  resize/color convert, then feed RKNN.
+- The current runtime uses direct resize for the performance baseline. A more
+  detection-quality-preserving production path should use letterbox resize:
+  preserve the original 16:9 aspect ratio, pad to 640x640, and map detections
+  back through the same scale/pad metadata.
+- Dynamic shape is possible in principle, but it is a larger deployment change:
+  the ONNX/RKNN export must support dynamic shapes, the runtime must select or
+  configure the active tensor shape, and YOLOv8 grid/stride/bbox mapping plus
+  the benchmark matrix must be validated per shape. For this stage, the 640
+  static-shape path is the better optimization target because it keeps RKNN
+  deployment and performance measurements stable.
+
+Initial RK3576 MJPEG latest-frame result:
 
 ```text
 frames processed: 30
@@ -591,6 +613,84 @@ stale frames instead of building a long queue and increasing visual latency.
 The next optimization target is preprocessing acceleration, especially
 replacing CPU resize/color conversion with RGA or moving capture and decode
 into a GStreamer pipeline.
+
+## Phase 5M: CPU Preprocess/Postprocess Profiling and Optimization
+
+The first MJPEG runtime proved that camera capture could reach 30 FPS, but the
+worker only processed 15 frames out of 30. That did not mean the pipeline was
+broken. It meant the real-time input side was faster than the CPU/NPU worker
+side, and latest-frame mode correctly skipped stale frames.
+
+To locate the worker bottleneck, the runtime now splits preprocessing into:
+
+```json
+"preprocess_detail_ms": {
+  "decode_mean": "...",
+  "resize_or_convert_mean": "..."
+}
+```
+
+Profiling before optimization showed:
+
+```text
+frames processed: 30
+rknn frames: 15
+skipped frames: 15
+preprocess mean: 17.394 ms
+  JPEG decode mean: 15.292 ms
+  resize/convert mean: 2.079 ms
+inference mean: 33.471 ms
+postprocess mean: 16.831 ms
+RKNN end-to-end mean: 69.046 ms
+```
+
+This showed two CPU hot spots:
+
+- JPEG decode was the main preprocessing cost.
+- YOLOv8 postprocess was still expensive because it scanned all 80 class scores
+  before applying the single-channel `score_sum` candidate filter.
+
+Optimizations added:
+
+- Postprocess now checks `score_sum` before scanning 80 class channels. Most
+  low-confidence grid positions are rejected with one scalar read instead of 80
+  class reads.
+- MJPEG decode uses libjpeg DCT scaling when the input is large enough. For
+  1280x720 camera frames and 640x640 model input, libjpeg decodes at half scale
+  before the runtime resizes to the final tensor size.
+
+Verified optimized MJPEG latest-frame result:
+
+```text
+frames processed: 30
+measured capture FPS: 30.215
+rknn frames: 19
+skipped frames: 11
+rknn failures: 0
+detections total: 63
+preprocess mean: 14.238 ms
+  JPEG decode mean: 9.853 ms
+  resize/convert mean: 4.372 ms
+inference mean: 36.506 ms
+postprocess mean: 1.523 ms
+RKNN end-to-end mean: 54.141 ms
+last-frame detections: chair 0.8379, banana 0.3235, bottle 0.3137, bottle 0.3000
+```
+
+Comparison:
+
+```text
+postprocess: 16.831 ms -> 1.523 ms
+JPEG decode: 15.292 ms -> 9.853 ms
+end-to-end worker latency: 69.046 ms -> 54.141 ms
+rknn frames per 30 captured frames: 15 -> 19
+skipped frames: 15 -> 11
+```
+
+The remaining CPU-heavy part is still JPEG decode/resize. The next production
+optimization should move more preprocessing work to a media pipeline or
+accelerator, such as GStreamer with hardware decode plugins or Rockchip RGA for
+resize/color conversion.
 
 Before running the live C++ camera test again, stop the Python service that owns
 the camera device, then restart it after the test:

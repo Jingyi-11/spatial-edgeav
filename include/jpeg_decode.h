@@ -4,13 +4,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef struct JpegDecodeStats {
+    double decode_ms;
+    double resize_ms;
+    uint32_t decoded_width;
+    uint32_t decoded_height;
+} JpegDecodeStats;
+
 int mjpeg_to_rgb_resized(
     const uint8_t *jpeg,
     size_t jpeg_size,
     uint8_t *rgb,
     uint32_t output_width,
     uint32_t output_height,
-    uint32_t *decoded_width,
-    uint32_t *decoded_height);
+    JpegDecodeStats *stats);
 
 #endif

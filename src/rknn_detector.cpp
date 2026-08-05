@@ -447,6 +447,10 @@ DecodeSummary decode_rockchip_yolov8_outputs(
 
         for (uint32_t y = 0; y < group.height; ++y) {
             for (uint32_t x = 0; x < group.width; ++x) {
+                if (score_sum_attr && score_sum_output && tensor_value(*score_sum_attr, *score_sum_output, 0, y, x) < kConfidenceThreshold) {
+                    continue;
+                }
+
                 int best_class = 0;
                 float best_score = tensor_value(score_attr, score_output, 0, y, x);
                 for (uint32_t class_id = 1; class_id < score_attr.dims[1]; ++class_id) {
@@ -457,9 +461,6 @@ DecodeSummary decode_rockchip_yolov8_outputs(
                     }
                 }
                 if (best_score < kConfidenceThreshold) {
-                    continue;
-                }
-                if (score_sum_attr && score_sum_output && tensor_value(*score_sum_attr, *score_sum_output, 0, y, x) < kConfidenceThreshold) {
                     continue;
                 }
 

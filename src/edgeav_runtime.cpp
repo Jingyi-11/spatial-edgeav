@@ -60,6 +60,8 @@ struct RuntimeStats {
     uint64_t detections_total = 0;
     uint64_t skipped_frames = 0;
     double preprocess_ms_total = 0.0;
+    double preprocess_decode_ms_total = 0.0;
+    double preprocess_resize_or_convert_ms_total = 0.0;
     double inference_ms_total = 0.0;
     double postprocess_ms_total = 0.0;
     double rknn_end_to_end_ms_total = 0.0;
@@ -69,6 +71,8 @@ struct RuntimeStats {
 struct FrameRecord {
     uint64_t sequence = 0;
     double preprocess_ms = 0.0;
+    double preprocess_decode_ms = 0.0;
+    double preprocess_resize_or_convert_ms = 0.0;
     double inference_ms = 0.0;
     double postprocess_ms = 0.0;
     double end_to_end_ms = 0.0;
@@ -290,6 +294,9 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
             mean_or_zero(stats.inference_ms_total, stats.rknn_frames),
             mean_or_zero(stats.postprocess_ms_total, stats.rknn_frames),
             mean_or_zero(stats.rknn_end_to_end_ms_total, stats.rknn_frames));
+    fprintf(file, "  \"preprocess_detail_ms\": {\"decode_mean\": %.3f, \"resize_or_convert_mean\": %.3f},\n",
+            mean_or_zero(stats.preprocess_decode_ms_total, stats.rknn_frames),
+            mean_or_zero(stats.preprocess_resize_or_convert_ms_total, stats.rknn_frames));
     fprintf(file, "  \"error\": %s\n", stats.error[0] == '\0' ? "null" : "\"runtime_error\"");
     fprintf(file, "}\n");
     fclose(file);
@@ -309,9 +316,11 @@ bool write_frames_json(const char *path, const FrameRecord *records, uint32_t co
     fprintf(file, "[\n");
     for (uint32_t index = 0; index < count; ++index) {
         const FrameRecord &record = records[index];
-        fprintf(file, "  {\"sequence\": %llu, \"latency_ms\": {\"preprocess\": %.3f, \"inference\": %.3f, \"postprocess\": %.3f, \"end_to_end\": %.3f}, \"detections\": [",
+        fprintf(file, "  {\"sequence\": %llu, \"latency_ms\": {\"preprocess\": %.3f, \"preprocess_decode\": %.3f, \"preprocess_resize_or_convert\": %.3f, \"inference\": %.3f, \"postprocess\": %.3f, \"end_to_end\": %.3f}, \"detections\": [",
                 static_cast<unsigned long long>(record.sequence),
                 record.preprocess_ms,
+                record.preprocess_decode_ms,
+                record.preprocess_resize_or_convert_ms,
                 record.inference_ms,
                 record.postprocess_ms,
                 record.end_to_end_ms);
@@ -381,16 +390,36 @@ int preprocess_frame_to_rknn_input(
     uint32_t width,
     uint32_t height,
     PixelFormat pixel_format,
-    uint8_t *rknn_input)
+    uint8_t *rknn_input,
+    double *decode_ms,
+    double *resize_or_convert_ms)
 {
+    if (decode_ms) {
+        *decode_ms = 0.0;
+    }
+    if (resize_or_convert_ms) {
+        *resize_or_convert_ms = 0.0;
+    }
     if (pixel_format == PIXEL_FORMAT_YUYV) {
-        return yuyv_to_rgb_resized(data, size, width, height, rknn_input, 640, 640);
+        uint64_t start_us = monotonic_time_us();
+        int result = yuyv_to_rgb_resized(data, size, width, height, rknn_input, 640, 640);
+        uint64_t end_us = monotonic_time_us();
+        if (resize_or_convert_ms) {
+            *resize_or_convert_ms = elapsed_ms(start_us, end_us);
+        }
+        return result;
     }
 #ifdef EDGEAV_ENABLE_LIBJPEG
     if (pixel_format == PIXEL_FORMAT_MJPEG) {
-        uint32_t decoded_width = 0;
-        uint32_t decoded_height = 0;
-        return mjpeg_to_rgb_resized(data, size, rknn_input, 640, 640, &decoded_width, &decoded_height);
+        JpegDecodeStats stats;
+        int result = mjpeg_to_rgb_resized(data, size, rknn_input, 640, 640, &stats);
+        if (decode_ms) {
+            *decode_ms = stats.decode_ms;
+        }
+        if (resize_or_convert_ms) {
+            *resize_or_convert_ms = stats.resize_ms;
+        }
+        return result;
     }
 #endif
     return -1;
@@ -410,13 +439,17 @@ void on_frame(const VideoFrame *frame, void *userdata)
 
     if (context->config->rknn_model_path && context->rknn_input && pixel_format_supported_for_rknn(frame->pixel_format)) {
         uint64_t preprocess_start_us = monotonic_time_us();
+        double decode_ms = 0.0;
+        double resize_or_convert_ms = 0.0;
         int preprocess_result = preprocess_frame_to_rknn_input(
             frame->data,
             frame->size,
             frame->width,
             frame->height,
             frame->pixel_format,
-            context->rknn_input);
+            context->rknn_input,
+            &decode_ms,
+            &resize_or_convert_ms);
         uint64_t preprocess_end_us = monotonic_time_us();
         if (preprocess_result == 0) {
             double preprocess_ms = elapsed_ms(preprocess_start_us, preprocess_end_us);
@@ -447,6 +480,8 @@ void on_frame(const VideoFrame *frame, void *userdata)
                     stats->rknn_frames++;
                     stats->detections_total += result.detections_after_nms;
                     stats->preprocess_ms_total += preprocess_ms;
+                    stats->preprocess_decode_ms_total += decode_ms;
+                    stats->preprocess_resize_or_convert_ms_total += resize_or_convert_ms;
                     stats->inference_ms_total += result.inference_ms;
                     stats->postprocess_ms_total += result.postprocess_ms;
                     stats->rknn_end_to_end_ms_total += end_to_end_ms;
@@ -455,6 +490,8 @@ void on_frame(const VideoFrame *frame, void *userdata)
                         FrameRecord &record = context->frame_records[context->frame_record_count++];
                         record.sequence = frame->sequence;
                         record.preprocess_ms = preprocess_ms;
+                        record.preprocess_decode_ms = decode_ms;
+                        record.preprocess_resize_or_convert_ms = resize_or_convert_ms;
                         record.inference_ms = result.inference_ms;
                         record.postprocess_ms = result.postprocess_ms;
                         record.end_to_end_ms = end_to_end_ms;
@@ -511,6 +548,8 @@ void store_frame_result(
     uint32_t *frame_record_count,
     uint64_t sequence,
     double preprocess_ms,
+    double decode_ms,
+    double resize_or_convert_ms,
     double end_to_end_ms,
     const RknnFrameResult &result)
 {
@@ -520,6 +559,8 @@ void store_frame_result(
     FrameRecord &record = frame_records[(*frame_record_count)++];
     record.sequence = sequence;
     record.preprocess_ms = preprocess_ms;
+    record.preprocess_decode_ms = decode_ms;
+    record.preprocess_resize_or_convert_ms = resize_or_convert_ms;
     record.inference_ms = result.inference_ms;
     record.postprocess_ms = result.postprocess_ms;
     record.end_to_end_ms = end_to_end_ms;
@@ -533,6 +574,8 @@ void store_frame_result(
 void accumulate_rknn_stats(
     RuntimeStats *stats,
     double preprocess_ms,
+    double decode_ms,
+    double resize_or_convert_ms,
     double end_to_end_ms,
     const RknnFrameResult &result)
 {
@@ -541,6 +584,8 @@ void accumulate_rknn_stats(
     stats->rknn_frames++;
     stats->detections_total += result.detections_after_nms;
     stats->preprocess_ms_total += preprocess_ms;
+    stats->preprocess_decode_ms_total += decode_ms;
+    stats->preprocess_resize_or_convert_ms_total += resize_or_convert_ms;
     stats->inference_ms_total += result.inference_ms;
     stats->postprocess_ms_total += result.postprocess_ms;
     stats->rknn_end_to_end_ms_total += end_to_end_ms;
@@ -582,7 +627,17 @@ void latest_frame_worker(
         pthread_mutex_unlock(&state->mutex);
 
         uint64_t preprocess_start_us = monotonic_time_us();
-        int preprocess_result = preprocess_frame_to_rknn_input(raw_frame, frame_bytes, width, height, pixel_format, rknn_input);
+        double decode_ms = 0.0;
+        double resize_or_convert_ms = 0.0;
+        int preprocess_result = preprocess_frame_to_rknn_input(
+            raw_frame,
+            frame_bytes,
+            width,
+            height,
+            pixel_format,
+            rknn_input,
+            &decode_ms,
+            &resize_or_convert_ms);
         uint64_t preprocess_end_us = monotonic_time_us();
         if (preprocess_result != 0) {
             pthread_mutex_lock(&state->mutex);
@@ -615,13 +670,15 @@ void latest_frame_worker(
             pthread_mutex_unlock(&state->mutex);
             continue;
         }
-        accumulate_rknn_stats(state->stats, preprocess_ms, end_to_end_ms, frame_result);
+        accumulate_rknn_stats(state->stats, preprocess_ms, decode_ms, resize_or_convert_ms, end_to_end_ms, frame_result);
         store_frame_result(
             frame_records,
             frame_record_capacity,
             frame_record_count,
             sequence,
             preprocess_ms,
+            decode_ms,
+            resize_or_convert_ms,
             end_to_end_ms,
             frame_result);
         write_json(state->config->heartbeat_path, *state->config, *state->stats, "running");

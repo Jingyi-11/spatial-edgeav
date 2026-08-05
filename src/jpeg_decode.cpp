@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <jpeglib.h>
 
@@ -16,6 +17,21 @@ static void jpeg_error_exit(j_common_ptr cinfo)
 {
     JpegErrorManager *manager = reinterpret_cast<JpegErrorManager *>(cinfo->err);
     longjmp(manager->jump_buffer, 1);
+}
+
+static uint64_t jpeg_monotonic_time_us()
+{
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000ull + static_cast<uint64_t>(ts.tv_nsec) / 1000ull;
+}
+
+static double jpeg_elapsed_ms(uint64_t start_us, uint64_t end_us)
+{
+    if (end_us <= start_us) {
+        return 0.0;
+    }
+    return static_cast<double>(end_us - start_us) / 1000.0;
 }
 
 static void resize_rgb_nearest(
@@ -51,13 +67,16 @@ int mjpeg_to_rgb_resized(
     uint8_t *rgb,
     uint32_t output_width,
     uint32_t output_height,
-    uint32_t *decoded_width,
-    uint32_t *decoded_height)
+    JpegDecodeStats *stats)
 {
     if (!jpeg || jpeg_size == 0 || !rgb || output_width == 0 || output_height == 0) {
         return -1;
     }
+    if (stats) {
+        memset(stats, 0, sizeof(*stats));
+    }
 
+    uint64_t decode_start_us = jpeg_monotonic_time_us();
     jpeg_decompress_struct cinfo;
     JpegErrorManager error_manager;
     memset(&cinfo, 0, sizeof(cinfo));
@@ -74,6 +93,11 @@ int mjpeg_to_rgb_resized(
     if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
         jpeg_destroy_decompress(&cinfo);
         return -3;
+    }
+
+    if (cinfo.image_width >= output_width * 2u && cinfo.image_height >= output_height) {
+        cinfo.scale_num = 1;
+        cinfo.scale_denom = 2;
     }
     cinfo.out_color_space = JCS_RGB;
     jpeg_start_decompress(&cinfo);
@@ -104,15 +128,18 @@ int mjpeg_to_rgb_resized(
 
     jpeg_finish_decompress(&cinfo);
     jpeg_destroy_decompress(&cinfo);
+    uint64_t decode_end_us = jpeg_monotonic_time_us();
 
+    uint64_t resize_start_us = jpeg_monotonic_time_us();
     resize_rgb_nearest(decoded, width, height, rgb, output_width, output_height);
+    uint64_t resize_end_us = jpeg_monotonic_time_us();
     free(decoded);
 
-    if (decoded_width) {
-        *decoded_width = width;
-    }
-    if (decoded_height) {
-        *decoded_height = height;
+    if (stats) {
+        stats->decode_ms = jpeg_elapsed_ms(decode_start_us, decode_end_us);
+        stats->resize_ms = jpeg_elapsed_ms(resize_start_us, resize_end_us);
+        stats->decoded_width = width;
+        stats->decoded_height = height;
     }
     return 0;
 }
