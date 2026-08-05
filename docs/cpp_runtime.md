@@ -266,13 +266,21 @@ Makefile
 The runtime still supports the zero-filled synthetic RKNN smoke path. When a
 real V4L2 YUYV camera frame is available, it captures a frame, converts it into
 the RKNN input tensor, and passes that buffer to the same RKNN/postprocess path.
+For debugging, `--rknn-input-dump` can write the resized RGB tensor as a PPM
+image so the exact model input can be inspected when detections are missing.
 
 Run after deploying the C/C++ runtime:
 
 ```bash
 make deploy-cpp-runtime-board
 make run-cpp-live-yuyv-board
+make annotate-cpp-live-yuyv
 ```
+
+The live target copies the runtime report, heartbeat, RKNN report, and PPM model
+input dump back to `runs/rk3576_cpp_runtime/` after the board run finishes.
+The annotation target draws detections on the PPM input dump and works without
+third-party Python packages when both input and output are PPM files.
 
 Current validation status:
 
@@ -298,7 +306,34 @@ detections after NMS: 0
 reports:
   runs/rk3576_cpp_runtime/edgeav_runtime_live_yuyv_report.json
   runs/rk3576_cpp_runtime/edgeav_runtime_live_yuyv_rknn_report.json
+debug input:
+  /home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_live_yuyv_input.ppm
 ```
+
+The dumped model input was converted locally to PNG for inspection. The frame is
+a valid ceiling/indoor scene with a warm color cast, not a black frame or an
+obvious RGB/BGR channel swap. The zero-detection result is therefore consistent
+with the image content, because the captured scene does not contain a person or
+another clear COCO object.
+
+Follow-up live detection validation:
+
+```text
+frames processed: 3
+measured FPS: 9.979
+RKNN mean inference: 39.674 ms
+candidates before NMS: 20
+detections after NMS: 3
+detections:
+  class 56 chair, confidence 0.8001
+  class 39 bottle, confidence 0.4745
+  class 39 bottle, confidence 0.3294
+annotation:
+  runs/rk3576_cpp_runtime/edgeav_runtime_live_yuyv_annotated.ppm
+```
+
+This validates the full path from USB camera capture to RKNN NPU inference,
+C++ postprocess, JSON detection output, and visual artifact generation.
 
 Before running the live C++ camera test again, stop the Python service that owns
 the camera device, then restart it after the test:
@@ -310,6 +345,6 @@ sudo systemctl start spatial-edgeav-rknn.service
 ```
 
 The next engineering step is to validate the live C++ YUYV path with the Python
-service stopped against richer scenes, then add MJPEG decode or a GStreamer/RGA
-preprocessing path so the runtime can use the same high-FPS camera format as
-the existing Python service.
+service stopped against richer scenes by inspecting the dumped RKNN input image,
+then add MJPEG decode or a GStreamer/RGA preprocessing path so the runtime can
+use the same high-FPS camera format as the existing Python service.

@@ -22,6 +22,7 @@ struct RuntimeConfig {
     const char *rknn_model_path = nullptr;
     const char *rknn_library_path = "/usr/lib/librknnrt.so";
     const char *rknn_report_path = "out/edgeav_rknn_report.json";
+    const char *rknn_input_dump_path = nullptr;
     uint32_t width = 640;
     uint32_t height = 480;
     uint32_t fps = 30;
@@ -41,8 +42,10 @@ struct RuntimeStats {
     uint64_t end_us = 0;
     uint64_t last_sequence = 0;
     bool capture_ok = true;
+    bool rknn_input_ready = false;
     bool rknn_attempted = false;
     int rknn_result = 0;
+    bool rknn_input_dumped = false;
     char error[128] = {0};
 };
 
@@ -71,6 +74,7 @@ void print_usage(const char *program)
     printf("  --rknn-model PATH      Optional RKNN model smoke test\n");
     printf("  --rknn-lib PATH        RKNN runtime library, default /usr/lib/librknnrt.so\n");
     printf("  --rknn-report PATH     RKNN tensor/inference JSON report path\n");
+    printf("  --rknn-input-dump PATH Write resized RGB RKNN input as PPM when using live YUYV\n");
     printf("  --rknn-runs N          RKNN measured runs, default 10\n");
     printf("  --rknn-warmup N        RKNN warmup runs, default 3\n");
 }
@@ -125,6 +129,8 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
             config->rknn_library_path = argv[++index];
         } else if (strcmp(argv[index], "--rknn-report") == 0 && index + 1 < argc) {
             config->rknn_report_path = argv[++index];
+        } else if (strcmp(argv[index], "--rknn-input-dump") == 0 && index + 1 < argc) {
+            config->rknn_input_dump_path = argv[++index];
         } else if (strcmp(argv[index], "--rknn-runs") == 0 && index + 1 < argc) {
             if (!parse_u32(argv[++index], &config->rknn_runs)) {
                 return false;
@@ -183,10 +189,37 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
     fprintf(file, "  \"last_sequence\": %llu,\n", static_cast<unsigned long long>(stats.last_sequence));
     fprintf(file, "  \"measured_fps\": %.3f,\n", fps_from_stats(stats));
     fprintf(file, "  \"elapsed_ms\": %.3f,\n", elapsed_ms(stats.start_us, stats.end_us));
+    if (config.rknn_input_dump_path) {
+        fprintf(file, "  \"rknn_input\": {\"ready\": %s, \"dump_path\": \"%s\", \"dumped\": %s},\n",
+                stats.rknn_input_ready ? "true" : "false",
+                config.rknn_input_dump_path,
+                stats.rknn_input_dumped ? "true" : "false");
+    } else {
+        fprintf(file, "  \"rknn_input\": {\"ready\": %s, \"dump_path\": null, \"dumped\": %s},\n",
+                stats.rknn_input_ready ? "true" : "false",
+                stats.rknn_input_dumped ? "true" : "false");
+    }
     fprintf(file, "  \"error\": %s\n", stats.error[0] == '\0' ? "null" : "\"runtime_error\"");
     fprintf(file, "}\n");
     fclose(file);
     return true;
+}
+
+bool write_rgb_ppm(const char *path, const uint8_t *rgb, uint32_t width, uint32_t height)
+{
+    if (!path || !rgb || width == 0 || height == 0) {
+        return false;
+    }
+    FILE *file = fopen(path, "wb");
+    if (!file) {
+        perror("open rknn input dump");
+        return false;
+    }
+    fprintf(file, "P6\n%u %u\n255\n", width, height);
+    size_t bytes = static_cast<size_t>(width) * height * 3u;
+    bool ok = fwrite(rgb, 1, bytes, file) == bytes;
+    fclose(file);
+    return ok;
 }
 
 void on_frame(const VideoFrame *frame, void *userdata)
@@ -307,7 +340,12 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
     camera_stop(camera);
     camera_close(camera);
 
+    stats->rknn_input_ready = context.rknn_input_ready;
+
     if (result == 0 && config.rknn_model_path && context.rknn_input_ready) {
+        if (config.rknn_input_dump_path) {
+            stats->rknn_input_dumped = write_rgb_ppm(config.rknn_input_dump_path, context.rknn_input, 640, 640);
+        }
         RknnSmokeConfig rknn_config = {
             config.rknn_model_path,
             config.rknn_library_path,

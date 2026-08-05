@@ -217,14 +217,24 @@ The C/C++ runtime also has an initial real V4L2 YUYV input path:
 
 ```bash
 make run-cpp-live-yuyv-board
+make annotate-cpp-live-yuyv
 ```
 
 This converts a captured YUYV frame into an RGB `640x640` RKNN input tensor and
 uses the same C++ YOLOv8 postprocess path. Stop the Python systemd camera
 service first if it is holding `/dev/video73`.
+The target copies the live report, heartbeat, RKNN report, and PPM input dump
+back to `runs/rk3576_cpp_runtime/`.
+`make annotate-cpp-live-yuyv` draws the returned detections on the dumped model
+input without requiring third-party Python packages.
 
 Verified live YUYV result: `frames=3`, `measured_fps=9.996`,
 `input_source=v4l2_yuyv_rgb_resized`, `RKNN mean=48.046 ms`, postprocess OK.
+The target can also dump the resized RGB model input to
+`/home/kickpi/spatial-edgeav/runs/cpp_runtime/edgeav_runtime_live_yuyv_input.ppm`
+for visual debugging.
+Latest live detection check produced `detections_after_nms=3`, including a
+chair detection at `0.8001` confidence and two bottle detections.
 
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
