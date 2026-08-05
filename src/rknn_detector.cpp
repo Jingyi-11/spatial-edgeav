@@ -619,6 +619,197 @@ void write_report(
 
 } // namespace
 
+struct RknnDetector {
+    RknnApi api;
+    rknn_context ctx = 0;
+    RknnInputOutputNum io_num;
+    TensorSummary *inputs = nullptr;
+    TensorSummary *outputs = nullptr;
+    uint8_t *input_buffer = nullptr;
+    uint32_t input_size = 0;
+    uint8_t want_float = 0;
+};
+
+int rknn_detector_create(
+    RknnDetector **detector,
+    const char *model_path,
+    const char *library_path,
+    uint8_t want_float)
+{
+    if (!detector || !model_path || !library_path) {
+        return 2;
+    }
+
+    RknnDetector *created = static_cast<RknnDetector *>(calloc(1, sizeof(RknnDetector)));
+    if (!created) {
+        return 6;
+    }
+    created->want_float = want_float;
+
+    if (load_api(library_path, &created->api) != 0) {
+        free(created);
+        return 3;
+    }
+
+    int ret = created->api.init(&created->ctx, const_cast<char *>(model_path), 0, 0, nullptr);
+    if (ret != RKNN_SUCC) {
+        fprintf(stderr, "rknn_init failed: %d\n", ret);
+        rknn_detector_destroy(created);
+        return 4;
+    }
+
+    memset(&created->io_num, 0, sizeof(created->io_num));
+    ret = created->api.query(created->ctx, RKNN_QUERY_IN_OUT_NUM, &created->io_num, sizeof(created->io_num));
+    if (ret != RKNN_SUCC || created->io_num.n_input == 0 || created->io_num.n_output == 0 || created->io_num.n_input > 8 || created->io_num.n_output > 32) {
+        fprintf(stderr, "RKNN_QUERY_IN_OUT_NUM failed or returned unexpected counts: ret=%d inputs=%u outputs=%u\n",
+                ret,
+                created->io_num.n_input,
+                created->io_num.n_output);
+        rknn_detector_destroy(created);
+        return 5;
+    }
+
+    created->inputs = static_cast<TensorSummary *>(calloc(created->io_num.n_input, sizeof(TensorSummary)));
+    created->outputs = static_cast<TensorSummary *>(calloc(created->io_num.n_output, sizeof(TensorSummary)));
+    if (!created->inputs || !created->outputs) {
+        rknn_detector_destroy(created);
+        return 6;
+    }
+
+    for (uint32_t index = 0; index < created->io_num.n_input; ++index) {
+        created->inputs[index].attr.index = index;
+        ret = created->api.query(created->ctx, RKNN_QUERY_INPUT_ATTR, &created->inputs[index].attr, sizeof(created->inputs[index].attr));
+        if (ret != RKNN_SUCC) {
+            fprintf(stderr, "RKNN_QUERY_INPUT_ATTR %u failed: %d\n", index, ret);
+        }
+    }
+    for (uint32_t index = 0; index < created->io_num.n_output; ++index) {
+        created->outputs[index].attr.index = index;
+        ret = created->api.query(created->ctx, RKNN_QUERY_OUTPUT_ATTR, &created->outputs[index].attr, sizeof(created->outputs[index].attr));
+        if (ret != RKNN_SUCC) {
+            fprintf(stderr, "RKNN_QUERY_OUTPUT_ATTR %u failed: %d\n", index, ret);
+        }
+    }
+
+    created->input_size = fallback_input_size(&created->inputs[0].attr);
+    created->input_buffer = static_cast<uint8_t *>(calloc(created->input_size, 1));
+    if (!created->input_buffer) {
+        rknn_detector_destroy(created);
+        return 7;
+    }
+
+    *detector = created;
+    return 0;
+}
+
+int rknn_detector_run(
+    RknnDetector *detector,
+    const uint8_t *input_data,
+    uint32_t input_size,
+    RknnFrameResult *result)
+{
+    if (!detector || !input_data || input_size == 0 || !result) {
+        return 2;
+    }
+    memset(result, 0, sizeof(*result));
+
+    uint32_t copy_size = input_size < detector->input_size ? input_size : detector->input_size;
+    memcpy(detector->input_buffer, input_data, copy_size);
+    if (copy_size < detector->input_size) {
+        memset(detector->input_buffer + copy_size, 0, detector->input_size - copy_size);
+    }
+
+    RknnInput input;
+    memset(&input, 0, sizeof(input));
+    input.index = 0;
+    input.buf = detector->input_buffer;
+    input.size = detector->input_size;
+    input.pass_through = 0;
+    input.type = RKNN_TENSOR_UINT8;
+    input.fmt = RKNN_TENSOR_NHWC;
+
+    int ret = detector->api.inputs_set(detector->ctx, 1, &input);
+    if (ret != RKNN_SUCC) {
+        fprintf(stderr, "rknn_inputs_set failed: %d\n", ret);
+        result->status = 8;
+        return 8;
+    }
+
+    uint64_t inference_start_us = monotonic_time_us();
+    ret = detector->api.run(detector->ctx, nullptr);
+    if (ret != RKNN_SUCC) {
+        fprintf(stderr, "rknn_run failed: %d\n", ret);
+        result->status = 9;
+        return 9;
+    }
+
+    RknnOutput *rknn_outputs = static_cast<RknnOutput *>(calloc(detector->io_num.n_output, sizeof(RknnOutput)));
+    if (!rknn_outputs) {
+        result->status = 10;
+        return 10;
+    }
+    for (uint32_t output_index = 0; output_index < detector->io_num.n_output; ++output_index) {
+        rknn_outputs[output_index].index = output_index;
+        rknn_outputs[output_index].want_float = detector->want_float;
+        rknn_outputs[output_index].is_prealloc = 0;
+    }
+
+    ret = detector->api.outputs_get(detector->ctx, detector->io_num.n_output, rknn_outputs, nullptr);
+    uint64_t inference_end_us = monotonic_time_us();
+    if (ret != RKNN_SUCC) {
+        fprintf(stderr, "rknn_outputs_get failed: %d\n", ret);
+        free(rknn_outputs);
+        result->status = 11;
+        return 11;
+    }
+
+    uint64_t postprocess_start_us = monotonic_time_us();
+    DecodeSummary decode_summary = decode_rockchip_yolov8_outputs(detector->outputs, rknn_outputs, detector->io_num.n_output);
+    uint64_t postprocess_end_us = monotonic_time_us();
+
+    detector->api.outputs_release(detector->ctx, detector->io_num.n_output, rknn_outputs);
+    free(rknn_outputs);
+
+    result->status = decode_summary.supported ? 0 : 12;
+    result->inference_ms = static_cast<double>(inference_end_us - inference_start_us) / 1000.0;
+    result->postprocess_ms = static_cast<double>(postprocess_end_us - postprocess_start_us) / 1000.0;
+    result->candidates_before_nms = decode_summary.candidates_before_nms;
+    result->detections_before_nms = decode_summary.detections_before_nms;
+    result->detections_after_nms = decode_summary.detection_count;
+
+    for (uint32_t index = 0; index < decode_summary.detection_count && index < RKNN_DETECTOR_MAX_DETECTIONS; ++index) {
+        const Detection &source = decode_summary.detections[index];
+        RknnDetection &target = result->detections[index];
+        target.id = source.id;
+        target.class_id = source.class_id;
+        target.confidence = source.confidence;
+        target.bbox_xyxy[0] = source.x1;
+        target.bbox_xyxy[1] = source.y1;
+        target.bbox_xyxy[2] = source.x2;
+        target.bbox_xyxy[3] = source.y2;
+        target.bbox_xywh[0] = source.x1;
+        target.bbox_xywh[1] = source.y1;
+        target.bbox_xywh[2] = source.x2 - source.x1;
+        target.bbox_xywh[3] = source.y2 - source.y1;
+    }
+    return result->status;
+}
+
+void rknn_detector_destroy(RknnDetector *detector)
+{
+    if (!detector) {
+        return;
+    }
+    free(detector->input_buffer);
+    free(detector->inputs);
+    free(detector->outputs);
+    if (detector->ctx != 0 && detector->api.destroy) {
+        detector->api.destroy(detector->ctx);
+    }
+    unload_api(&detector->api);
+    free(detector);
+}
+
 int rknn_detector_smoke(const RknnSmokeConfig *config)
 {
     if (!config || !config->model_path || !config->library_path || !config->report_path) {

@@ -23,6 +23,7 @@ struct RuntimeConfig {
     const char *rknn_library_path = "/usr/lib/librknnrt.so";
     const char *rknn_report_path = "out/edgeav_rknn_report.json";
     const char *rknn_input_dump_path = nullptr;
+    const char *frames_json_path = "out/edgeav_runtime_frames.json";
     uint32_t width = 640;
     uint32_t height = 480;
     uint32_t fps = 30;
@@ -31,6 +32,7 @@ struct RuntimeConfig {
     uint32_t rknn_warmup = 3;
     PixelFormat pixel_format = PIXEL_FORMAT_YUYV;
     bool simulate = false;
+    bool rknn_every_frame = false;
 };
 
 struct RuntimeStats {
@@ -46,7 +48,25 @@ struct RuntimeStats {
     bool rknn_attempted = false;
     int rknn_result = 0;
     bool rknn_input_dumped = false;
+    uint64_t rknn_frames = 0;
+    uint64_t rknn_failures = 0;
+    uint64_t detections_total = 0;
+    double preprocess_ms_total = 0.0;
+    double inference_ms_total = 0.0;
+    double postprocess_ms_total = 0.0;
+    double rknn_end_to_end_ms_total = 0.0;
     char error[128] = {0};
+};
+
+struct FrameRecord {
+    uint64_t sequence = 0;
+    double preprocess_ms = 0.0;
+    double inference_ms = 0.0;
+    double postprocess_ms = 0.0;
+    double end_to_end_ms = 0.0;
+    uint32_t detections = 0;
+    RknnDetection top_detections[5];
+    uint32_t top_detection_count = 0;
 };
 
 struct RuntimeContext {
@@ -55,6 +75,10 @@ struct RuntimeContext {
     uint8_t *rknn_input = nullptr;
     size_t rknn_input_size = 0;
     bool rknn_input_ready = false;
+    RknnDetector *detector = nullptr;
+    FrameRecord *frame_records = nullptr;
+    uint32_t frame_record_capacity = 0;
+    uint32_t frame_record_count = 0;
 };
 
 void print_usage(const char *program)
@@ -70,11 +94,13 @@ void print_usage(const char *program)
     printf("  --format NAME          YUYV/NV12/MJPEG, default YUYV\n");
     printf("  --report PATH          JSON report path\n");
     printf("  --heartbeat PATH       JSON heartbeat path\n");
+    printf("  --frames-json PATH     Per-frame detection/latency JSON path\n");
     printf("  --simulate             Use synthetic frames instead of opening V4L2\n");
     printf("  --rknn-model PATH      Optional RKNN model smoke test\n");
     printf("  --rknn-lib PATH        RKNN runtime library, default /usr/lib/librknnrt.so\n");
     printf("  --rknn-report PATH     RKNN tensor/inference JSON report path\n");
     printf("  --rknn-input-dump PATH Write resized RGB RKNN input as PPM when using live YUYV\n");
+    printf("  --rknn-every-frame     Run RKNN on every captured YUYV frame\n");
     printf("  --rknn-runs N          RKNN measured runs, default 10\n");
     printf("  --rknn-warmup N        RKNN warmup runs, default 3\n");
 }
@@ -121,6 +147,8 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
             config->report_path = argv[++index];
         } else if (strcmp(argv[index], "--heartbeat") == 0 && index + 1 < argc) {
             config->heartbeat_path = argv[++index];
+        } else if (strcmp(argv[index], "--frames-json") == 0 && index + 1 < argc) {
+            config->frames_json_path = argv[++index];
         } else if (strcmp(argv[index], "--simulate") == 0) {
             config->simulate = true;
         } else if (strcmp(argv[index], "--rknn-model") == 0 && index + 1 < argc) {
@@ -131,6 +159,8 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
             config->rknn_report_path = argv[++index];
         } else if (strcmp(argv[index], "--rknn-input-dump") == 0 && index + 1 < argc) {
             config->rknn_input_dump_path = argv[++index];
+        } else if (strcmp(argv[index], "--rknn-every-frame") == 0) {
+            config->rknn_every_frame = true;
         } else if (strcmp(argv[index], "--rknn-runs") == 0 && index + 1 < argc) {
             if (!parse_u32(argv[++index], &config->rknn_runs)) {
                 return false;
@@ -166,6 +196,11 @@ double fps_from_stats(const RuntimeStats &stats)
     return static_cast<double>(stats.frames - 1) / elapsed_s;
 }
 
+double mean_or_zero(double total, uint64_t count)
+{
+    return count > 0 ? total / static_cast<double>(count) : 0.0;
+}
+
 bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStats &stats, const char *status)
 {
     FILE *file = fopen(path, "w");
@@ -199,8 +234,56 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
                 stats.rknn_input_ready ? "true" : "false",
                 stats.rknn_input_dumped ? "true" : "false");
     }
+    fprintf(file, "  \"rknn_continuous\": {\"enabled\": %s, \"frames\": %llu, \"failures\": %llu, \"detections_total\": %llu},\n",
+            config.rknn_every_frame ? "true" : "false",
+            static_cast<unsigned long long>(stats.rknn_frames),
+            static_cast<unsigned long long>(stats.rknn_failures),
+            static_cast<unsigned long long>(stats.detections_total));
+    fprintf(file, "  \"latency_ms\": {\"preprocess_mean\": %.3f, \"inference_mean\": %.3f, \"postprocess_mean\": %.3f, \"rknn_end_to_end_mean\": %.3f},\n",
+            mean_or_zero(stats.preprocess_ms_total, stats.rknn_frames),
+            mean_or_zero(stats.inference_ms_total, stats.rknn_frames),
+            mean_or_zero(stats.postprocess_ms_total, stats.rknn_frames),
+            mean_or_zero(stats.rknn_end_to_end_ms_total, stats.rknn_frames));
     fprintf(file, "  \"error\": %s\n", stats.error[0] == '\0' ? "null" : "\"runtime_error\"");
     fprintf(file, "}\n");
+    fclose(file);
+    return true;
+}
+
+bool write_frames_json(const char *path, const FrameRecord *records, uint32_t count)
+{
+    if (!path) {
+        return false;
+    }
+    FILE *file = fopen(path, "w");
+    if (!file) {
+        perror("open frames json");
+        return false;
+    }
+    fprintf(file, "[\n");
+    for (uint32_t index = 0; index < count; ++index) {
+        const FrameRecord &record = records[index];
+        fprintf(file, "  {\"sequence\": %llu, \"latency_ms\": {\"preprocess\": %.3f, \"inference\": %.3f, \"postprocess\": %.3f, \"end_to_end\": %.3f}, \"detections\": [",
+                static_cast<unsigned long long>(record.sequence),
+                record.preprocess_ms,
+                record.inference_ms,
+                record.postprocess_ms,
+                record.end_to_end_ms);
+        for (uint32_t det_index = 0; det_index < record.top_detection_count; ++det_index) {
+            const RknnDetection &det = record.top_detections[det_index];
+            fprintf(file, "%s{\"id\": %d, \"class_id\": %d, \"confidence\": %.4f, \"bbox_xyxy\": [%.2f, %.2f, %.2f, %.2f]}",
+                    det_index == 0 ? "" : ", ",
+                    det.id,
+                    det.class_id,
+                    det.confidence,
+                    det.bbox_xyxy[0],
+                    det.bbox_xyxy[1],
+                    det.bbox_xyxy[2],
+                    det.bbox_xyxy[3]);
+        }
+        fprintf(file, "]}%s\n", index + 1 < count ? "," : "");
+    }
+    fprintf(file, "]\n");
     fclose(file);
     return true;
 }
@@ -234,18 +317,69 @@ void on_frame(const VideoFrame *frame, void *userdata)
     stats->frames++;
     stats->bytes += frame->size;
 
-    if (context->config->rknn_model_path && context->rknn_input && !context->rknn_input_ready && frame->pixel_format == PIXEL_FORMAT_YUYV) {
-        if (yuyv_to_rgb_resized(
-                frame->data,
-                frame->size,
-                frame->width,
-                frame->height,
-                context->rknn_input,
-                640,
-                640) == 0) {
+    if (context->config->rknn_model_path && context->rknn_input && frame->pixel_format == PIXEL_FORMAT_YUYV) {
+        uint64_t preprocess_start_us = monotonic_time_us();
+        int preprocess_result = yuyv_to_rgb_resized(
+            frame->data,
+            frame->size,
+            frame->width,
+            frame->height,
+            context->rknn_input,
+            640,
+            640);
+        uint64_t preprocess_end_us = monotonic_time_us();
+        if (preprocess_result == 0) {
+            double preprocess_ms = elapsed_ms(preprocess_start_us, preprocess_end_us);
             context->rknn_input_ready = true;
+            stats->rknn_input_ready = true;
+
+            if (context->config->rknn_input_dump_path && !stats->rknn_input_dumped) {
+                stats->rknn_input_dumped = write_rgb_ppm(context->config->rknn_input_dump_path, context->rknn_input, 640, 640);
+            }
+
+            if (context->config->rknn_every_frame && context->detector) {
+                uint64_t end_to_end_start_us = preprocess_start_us;
+                RknnFrameResult result;
+                int rknn_result = rknn_detector_run(
+                    context->detector,
+                    context->rknn_input,
+                    static_cast<uint32_t>(context->rknn_input_size),
+                    &result);
+                uint64_t end_to_end_end_us = monotonic_time_us();
+                double end_to_end_ms = elapsed_ms(end_to_end_start_us, end_to_end_end_us);
+
+                stats->rknn_attempted = true;
+                stats->rknn_result = rknn_result;
+                if (rknn_result != 0) {
+                    stats->rknn_failures++;
+                    snprintf(stats->error, sizeof(stats->error), "rknn_detector_run failed");
+                } else {
+                    stats->rknn_frames++;
+                    stats->detections_total += result.detections_after_nms;
+                    stats->preprocess_ms_total += preprocess_ms;
+                    stats->inference_ms_total += result.inference_ms;
+                    stats->postprocess_ms_total += result.postprocess_ms;
+                    stats->rknn_end_to_end_ms_total += end_to_end_ms;
+
+                    if (context->frame_records && context->frame_record_count < context->frame_record_capacity) {
+                        FrameRecord &record = context->frame_records[context->frame_record_count++];
+                        record.sequence = frame->sequence;
+                        record.preprocess_ms = preprocess_ms;
+                        record.inference_ms = result.inference_ms;
+                        record.postprocess_ms = result.postprocess_ms;
+                        record.end_to_end_ms = end_to_end_ms;
+                        record.detections = result.detections_after_nms;
+                        record.top_detection_count = result.detections_after_nms < 5 ? result.detections_after_nms : 5;
+                        for (uint32_t index = 0; index < record.top_detection_count; ++index) {
+                            record.top_detections[index] = result.detections[index];
+                        }
+                    }
+                }
+            }
         }
     }
+
+    write_json(context->config->heartbeat_path, *context->config, *stats, "running");
 }
 
 size_t simulated_frame_size(const RuntimeConfig &config)
@@ -285,9 +419,12 @@ int run_simulated(const RuntimeConfig &config, RuntimeStats *stats)
             nullptr,
             0,
             false,
+            nullptr,
+            nullptr,
+            0,
+            0,
         };
         on_frame(&frame, &context);
-        write_json(config.heartbeat_path, config, *stats, "running");
         usleep(sleep_us);
     }
     free(data);
@@ -319,8 +456,13 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
         nullptr,
         0,
         false,
+        nullptr,
+        nullptr,
+        0,
+        0,
     };
     uint8_t *rknn_input = nullptr;
+    FrameRecord *frame_records = nullptr;
     if (config.rknn_model_path && config.pixel_format == PIXEL_FORMAT_YUYV) {
         context.rknn_input_size = 640u * 640u * 3u;
         rknn_input = static_cast<uint8_t *>(calloc(context.rknn_input_size, 1));
@@ -329,6 +471,29 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
             snprintf(stats->error, sizeof(stats->error), "rknn input allocation failed");
             camera_close(camera);
             return -1;
+        }
+        if (config.rknn_every_frame) {
+            int detector_result = rknn_detector_create(
+                &context.detector,
+                config.rknn_model_path,
+                config.rknn_library_path,
+                0);
+            if (detector_result != 0) {
+                snprintf(stats->error, sizeof(stats->error), "rknn_detector_create failed");
+                camera_close(camera);
+                free(rknn_input);
+                return detector_result;
+            }
+            frame_records = static_cast<FrameRecord *>(calloc(config.frames, sizeof(FrameRecord)));
+            if (!frame_records) {
+                snprintf(stats->error, sizeof(stats->error), "frame records allocation failed");
+                rknn_detector_destroy(context.detector);
+                camera_close(camera);
+                free(rknn_input);
+                return -1;
+            }
+            context.frame_records = frame_records;
+            context.frame_record_capacity = config.frames;
         }
     }
 
@@ -342,8 +507,15 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
 
     stats->rknn_input_ready = context.rknn_input_ready;
 
-    if (result == 0 && config.rknn_model_path && context.rknn_input_ready) {
-        if (config.rknn_input_dump_path) {
+    if (config.rknn_every_frame && frame_records) {
+        write_frames_json(config.frames_json_path, frame_records, context.frame_record_count);
+        if (stats->rknn_failures > 0 && result == 0) {
+            result = stats->rknn_result == 0 ? -1 : stats->rknn_result;
+        }
+    }
+
+    if (result == 0 && config.rknn_model_path && context.rknn_input_ready && !config.rknn_every_frame) {
+        if (config.rknn_input_dump_path && !stats->rknn_input_dumped) {
             stats->rknn_input_dumped = write_rgb_ppm(config.rknn_input_dump_path, context.rknn_input, 640, 640);
         }
         RknnSmokeConfig rknn_config = {
@@ -369,6 +541,8 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
         result = -1;
     }
 
+    rknn_detector_destroy(context.detector);
+    free(frame_records);
     free(rknn_input);
     return result;
 }

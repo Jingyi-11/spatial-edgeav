@@ -43,8 +43,9 @@ def class_name(class_id: int) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, type=Path, help="Input PPM/PNG image used by RKNN")
-    parser.add_argument("--report", required=True, type=Path, help="RKNN JSON report with detections")
+    parser.add_argument("--report", required=True, type=Path, help="RKNN JSON report or continuous frames JSON with detections")
     parser.add_argument("--output", required=True, type=Path, help="Annotated PNG output path")
+    parser.add_argument("--frame-index", type=int, default=-1, help="Frame index for continuous frames JSON, default last frame")
     return parser.parse_args()
 
 
@@ -145,7 +146,15 @@ def annotate_with_pillow(args: argparse.Namespace, detections: list[dict]) -> No
 def main() -> int:
     args = parse_args()
     report = json.loads(args.report.read_text())
-    detections = report.get("detections", [])
+    if isinstance(report, list):
+        if not report:
+            detections = []
+        else:
+            frame_index = args.frame_index if args.frame_index >= 0 else len(report) - 1
+            frame_index = max(0, min(frame_index, len(report) - 1))
+            detections = report[frame_index].get("detections", [])
+    else:
+        detections = report.get("detections", [])
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if Image is None:

@@ -218,6 +218,8 @@ The C/C++ runtime also has an initial real V4L2 YUYV input path:
 ```bash
 make run-cpp-live-yuyv-board
 make annotate-cpp-live-yuyv
+make run-cpp-continuous-yuyv-board
+make annotate-cpp-continuous-yuyv
 ```
 
 This converts a captured YUYV frame into an RGB `640x640` RKNN input tensor and
@@ -235,6 +237,12 @@ The target can also dump the resized RGB model input to
 for visual debugging.
 Latest live detection check produced `detections_after_nms=3`, including a
 chair detection at `0.8001` confidence and two bottle detections.
+
+The C/C++ runtime now also supports a continuous per-frame RKNN baseline with
+`--rknn-every-frame`. Verified continuous YUYV result: `frames=30`,
+`rknn_frames=30`, `failures=0`, `detections_total=64`,
+`preprocess_mean=12.102 ms`, `inference_mean=37.717 ms`,
+`postprocess_mean=17.951 ms`, `rknn_end_to_end_mean=69.470 ms`.
 
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 

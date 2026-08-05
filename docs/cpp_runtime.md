@@ -335,6 +335,78 @@ annotation:
 This validates the full path from USB camera capture to RKNN NPU inference,
 C++ postprocess, JSON detection output, and visual artifact generation.
 
+## Phase 5H: Continuous Per-Frame RKNN Runtime
+
+The C/C++ runtime now supports a real continuous inference baseline:
+
+```text
+V4L2 YUYV frame callback
+  -> YUYV resize/convert to RGB 640x640
+  -> persistent RKNN detector context
+  -> rknn_inputs_set / rknn_run / rknn_outputs_get
+  -> C++ YOLOv8 optimized-head postprocess
+  -> per-frame detections + latency JSON
+  -> heartbeat + final report
+```
+
+Run after deploying the latest C/C++ runtime:
+
+```bash
+make deploy-cpp-runtime-board
+make run-cpp-continuous-yuyv-board
+make annotate-cpp-continuous-yuyv
+```
+
+Implemented pieces:
+
+```text
+include/rknn_detector.h
+src/rknn_detector.cpp
+src/edgeav_runtime.cpp
+scripts/annotate_rknn_detections.py
+Makefile
+```
+
+Key runtime changes:
+
+- `rknn_detector_create()` initializes the RKNN runtime once and caches tensor
+  attributes and input buffers.
+- `rknn_detector_run()` performs one frame of input set, NPU inference, output
+  fetch, YOLOv8 postprocess, and detection copy-out.
+- `rknn_detector_destroy()` releases the RKNN context and dynamic library.
+- `edgeav_runtime --rknn-every-frame` runs preprocess + RKNN + postprocess in
+  the V4L2 frame callback.
+- `--frames-json` records per-frame latency and top detections.
+
+Verified continuous YUYV result:
+
+```text
+frames processed: 30
+rknn frames: 30
+rknn failures: 0
+detections total: 64
+measured capture FPS: 9.972
+preprocess mean: 12.102 ms
+inference mean: 37.717 ms
+postprocess mean: 17.951 ms
+RKNN end-to-end mean: 69.470 ms
+first frame: chair 0.8482
+last frame: chair 0.8242, bottle 0.3706
+artifacts:
+  runs/rk3576_cpp_runtime/edgeav_runtime_continuous_yuyv_report.json
+  runs/rk3576_cpp_runtime/edgeav_runtime_continuous_yuyv_frames.json
+  runs/rk3576_cpp_runtime/edgeav_runtime_continuous_yuyv_input.ppm
+  runs/rk3576_cpp_runtime/edgeav_runtime_continuous_yuyv_annotated.ppm
+```
+
+This is the first C/C++ runtime baseline that is directly comparable in shape
+to the Python camera loop: it performs per-frame capture, preprocess, NPU
+inference, postprocess, and artifact generation. It is still intentionally
+simple: inference runs synchronously inside the capture callback and YUYV resize
+is CPU-based. The next optimization step is to split capture/inference into a
+producer-consumer loop and add MJPEG/GStreamer/RGA preprocessing so camera
+capture can run closer to the requested 30 FPS.
+
 Before running the live C++ camera test again, stop the Python service that owns
 the camera device, then restart it after the test:
 
@@ -344,7 +416,7 @@ make run-cpp-live-yuyv-board
 sudo systemctl start spatial-edgeav-rknn.service
 ```
 
-The next engineering step is to validate the live C++ YUYV path with the Python
-service stopped against richer scenes by inspecting the dumped RKNN input image,
-then add MJPEG decode or a GStreamer/RGA preprocessing path so the runtime can
-use the same high-FPS camera format as the existing Python service.
+The next engineering step is to move this synchronous baseline into a
+producer-consumer runtime shape, then add MJPEG decode or a GStreamer/RGA
+preprocessing path so capture and preprocessing can run closer to the requested
+30 FPS while RKNN inference continues on the NPU.
