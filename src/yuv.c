@@ -1,6 +1,7 @@
 #include "yuv.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static uint8_t clamp_int(int value)
 {
@@ -78,6 +79,56 @@ int yuyv_to_rgb_resized(
             uint8_t u = yuyv[yuyv_offset + 1u];
             uint8_t v = yuyv[yuyv_offset + 3u];
             size_t rgb_offset = ((size_t)out_y * output_width + out_x) * 3u;
+            yuv_to_rgb(y_value, u, v, &rgb[rgb_offset + 0u], &rgb[rgb_offset + 1u], &rgb[rgb_offset + 2u]);
+        }
+    }
+
+    return 0;
+}
+
+int yuyv_to_rgb_letterboxed(
+    const uint8_t *yuyv,
+    size_t size,
+    uint32_t width,
+    uint32_t height,
+    uint8_t *rgb,
+    uint32_t output_width,
+    uint32_t output_height,
+    uint8_t pad_value)
+{
+    size_t expected_size = (size_t)width * (size_t)height * 2u;
+    if (!yuyv || !rgb || size < expected_size || width == 0 || height == 0 || output_width == 0 || output_height == 0) {
+        return -1;
+    }
+
+    memset(rgb, pad_value, (size_t)output_width * output_height * 3u);
+
+    uint64_t scaled_width_by_height = (uint64_t)output_height * width / height;
+    uint32_t scaled_width = output_width;
+    uint32_t scaled_height = output_height;
+    if (scaled_width_by_height <= output_width) {
+        scaled_width = (uint32_t)scaled_width_by_height;
+        scaled_height = output_height;
+    } else {
+        scaled_width = output_width;
+        scaled_height = (uint32_t)((uint64_t)output_width * height / width);
+    }
+    if (scaled_width == 0 || scaled_height == 0) {
+        return -1;
+    }
+
+    uint32_t pad_x = (output_width - scaled_width) / 2u;
+    uint32_t pad_y = (output_height - scaled_height) / 2u;
+    for (uint32_t out_y = 0; out_y < scaled_height; ++out_y) {
+        uint32_t src_y = (uint32_t)(((uint64_t)out_y * height) / scaled_height);
+        for (uint32_t out_x = 0; out_x < scaled_width; ++out_x) {
+            uint32_t src_x = (uint32_t)(((uint64_t)out_x * width) / scaled_width);
+            uint32_t pair_x = src_x & ~1u;
+            size_t yuyv_offset = ((size_t)src_y * width + pair_x) * 2u;
+            uint8_t y_value = yuyv[yuyv_offset + (src_x & 1u) * 2u];
+            uint8_t u = yuyv[yuyv_offset + 1u];
+            uint8_t v = yuyv[yuyv_offset + 3u];
+            size_t rgb_offset = ((size_t)(out_y + pad_y) * output_width + (out_x + pad_x)) * 3u;
             yuv_to_rgb(y_value, u, v, &rgb[rgb_offset + 0u], &rgb[rgb_offset + 1u], &rgb[rgb_offset + 2u]);
         }
     }

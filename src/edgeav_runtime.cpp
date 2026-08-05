@@ -38,6 +38,7 @@ struct RuntimeConfig {
     uint32_t rknn_warmup = 3;
     PixelFormat pixel_format = PIXEL_FORMAT_YUYV;
     bool simulate = false;
+    bool letterbox = false;
     bool rknn_every_frame = false;
     bool rknn_latest_frame = false;
 };
@@ -137,6 +138,7 @@ void print_usage(const char *program)
     printf("  --report PATH          JSON report path\n");
     printf("  --heartbeat PATH       JSON heartbeat path\n");
     printf("  --frames-json PATH     Per-frame detection/latency JSON path\n");
+    printf("  --letterbox            Preserve camera aspect ratio and pad to 640x640\n");
     printf("  --simulate             Use synthetic frames instead of opening V4L2\n");
     printf("  --rknn-model PATH      Optional RKNN model smoke test\n");
     printf("  --rknn-lib PATH        RKNN runtime library, default /usr/lib/librknnrt.so\n");
@@ -192,6 +194,8 @@ bool parse_args(int argc, char **argv, RuntimeConfig *config)
             config->heartbeat_path = argv[++index];
         } else if (strcmp(argv[index], "--frames-json") == 0 && index + 1 < argc) {
             config->frames_json_path = argv[++index];
+        } else if (strcmp(argv[index], "--letterbox") == 0) {
+            config->letterbox = true;
         } else if (strcmp(argv[index], "--simulate") == 0) {
             config->simulate = true;
         } else if (strcmp(argv[index], "--rknn-model") == 0 && index + 1 < argc) {
@@ -267,6 +271,9 @@ bool write_json(const char *path, const RuntimeConfig &config, const RuntimeStat
                  config.height,
                  config.fps,
                  pixel_format_name(config.pixel_format));
+    fprintf(file, "  \"preprocessing\": {\"image_size\": 640, \"mode\": \"%s\", \"pad_value\": %u},\n",
+            config.letterbox ? "letterbox" : "direct_resize",
+            config.letterbox ? 114u : 0u);
     fprintf(file, "  \"frames_processed\": %llu,\n", static_cast<unsigned long long>(stats.frames));
     fprintf(file, "  \"bytes_processed\": %llu,\n", static_cast<unsigned long long>(stats.bytes));
     fprintf(file, "  \"last_sequence\": %llu,\n", static_cast<unsigned long long>(stats.last_sequence));
@@ -373,13 +380,13 @@ bool pixel_format_supported_for_rknn(PixelFormat format)
     return false;
 }
 
-const char *rknn_input_source_name(PixelFormat format)
+const char *rknn_input_source_name(PixelFormat format, bool letterbox)
 {
     if (format == PIXEL_FORMAT_YUYV) {
-        return "v4l2_yuyv_rgb_resized";
+        return letterbox ? "v4l2_yuyv_rgb_letterboxed" : "v4l2_yuyv_rgb_resized";
     }
     if (format == PIXEL_FORMAT_MJPEG) {
-        return "v4l2_mjpeg_decoded_rgb_resized";
+        return letterbox ? "v4l2_mjpeg_decoded_rgb_letterboxed" : "v4l2_mjpeg_decoded_rgb_resized";
     }
     return "v4l2_unsupported";
 }
@@ -390,6 +397,7 @@ int preprocess_frame_to_rknn_input(
     uint32_t width,
     uint32_t height,
     PixelFormat pixel_format,
+    bool letterbox,
     uint8_t *rknn_input,
     double *decode_ms,
     double *resize_or_convert_ms)
@@ -402,7 +410,9 @@ int preprocess_frame_to_rknn_input(
     }
     if (pixel_format == PIXEL_FORMAT_YUYV) {
         uint64_t start_us = monotonic_time_us();
-        int result = yuyv_to_rgb_resized(data, size, width, height, rknn_input, 640, 640);
+        int result = letterbox
+            ? yuyv_to_rgb_letterboxed(data, size, width, height, rknn_input, 640, 640, 114)
+            : yuyv_to_rgb_resized(data, size, width, height, rknn_input, 640, 640);
         uint64_t end_us = monotonic_time_us();
         if (resize_or_convert_ms) {
             *resize_or_convert_ms = elapsed_ms(start_us, end_us);
@@ -412,7 +422,7 @@ int preprocess_frame_to_rknn_input(
 #ifdef EDGEAV_ENABLE_LIBJPEG
     if (pixel_format == PIXEL_FORMAT_MJPEG) {
         JpegDecodeStats stats;
-        int result = mjpeg_to_rgb_resized(data, size, rknn_input, 640, 640, &stats);
+        int result = mjpeg_to_rgb_resized(data, size, rknn_input, 640, 640, letterbox ? 1 : 0, &stats);
         if (decode_ms) {
             *decode_ms = stats.decode_ms;
         }
@@ -447,6 +457,7 @@ void on_frame(const VideoFrame *frame, void *userdata)
             frame->width,
             frame->height,
             frame->pixel_format,
+            context->config->letterbox,
             context->rknn_input,
             &decode_ms,
             &resize_or_convert_ms);
@@ -635,6 +646,7 @@ void latest_frame_worker(
             width,
             height,
             pixel_format,
+            state->config->letterbox,
             rknn_input,
             &decode_ms,
             &resize_or_convert_ms);
@@ -916,7 +928,7 @@ int run_v4l2(const RuntimeConfig &config, RuntimeStats *stats)
             config.rknn_report_path,
             context.rknn_input,
             static_cast<uint32_t>(context.rknn_input_size),
-            rknn_input_source_name(config.pixel_format),
+            rknn_input_source_name(config.pixel_format, config.letterbox),
             config.rknn_runs,
             config.rknn_warmup,
             0,

@@ -692,6 +692,77 @@ optimization should move more preprocessing work to a media pipeline or
 accelerator, such as GStreamer with hardware decode plugins or Rockchip RGA for
 resize/color conversion.
 
+## Phase 5N: Optional Letterbox Preprocessing
+
+The runtime now supports an optional `--letterbox` preprocessing mode. Direct
+resize is still the default, so performance baselines remain comparable:
+
+```bash
+make run-cpp-latest-mjpeg-board
+make run-cpp-latest-mjpeg-letterbox-board
+make annotate-cpp-latest-mjpeg
+make annotate-cpp-latest-mjpeg-letterbox
+```
+
+Direct resize path:
+
+```text
+1280x720 camera frame
+  -> MJPEG decode
+  -> stretch to 640x640
+  -> RKNN input
+```
+
+Letterbox path:
+
+```text
+1280x720 camera frame
+  -> MJPEG decode
+  -> preserve 16:9 aspect ratio
+  -> fit into 640x640 canvas
+  -> pad unused area with RGB 114
+  -> RKNN input
+```
+
+Verified direct resize vs letterbox result on the same RK3576/C920 setup:
+
+```text
+direct resize:
+  measured capture FPS: 30.212
+  rknn frames: 20/30
+  skipped frames: 10
+  detections total: 61
+  preprocess mean: 13.733 ms
+    JPEG decode mean: 9.526 ms
+    resize/convert mean: 4.195 ms
+  inference mean: 35.799 ms
+  postprocess mean: 1.353 ms
+  RKNN end-to-end mean: 52.497 ms
+
+letterbox:
+  measured capture FPS: 30.221
+  rknn frames: 20/30
+  skipped frames: 10
+  detections total: 46
+  preprocess mean: 11.870 ms
+    JPEG decode mean: 9.303 ms
+    resize/convert mean: 2.556 ms
+  inference mean: 36.218 ms
+  postprocess mean: 1.300 ms
+  RKNN end-to-end mean: 50.939 ms
+```
+
+Letterbox is mainly a detection-quality correction, not a NPU optimization. It
+avoids stretching 16:9 camera frames into a square input. In this run it was
+also slightly faster because the DCT-scaled MJPEG frame is about 640x360, so
+the runtime writes the valid 16:9 image region and pads the rest instead of
+resizing the image content to the full 640x640 square.
+
+Important follow-up: the current C++ detections are reported in the 640x640
+model-input coordinate system. For production overlays on the original
+1280x720 frame, the runtime should store the letterbox scale and padding, then
+map boxes back to original camera coordinates.
+
 Before running the live C++ camera test again, stop the Python service that owns
 the camera device, then restart it after the test:
 

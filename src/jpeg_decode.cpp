@@ -61,12 +61,59 @@ static void resize_rgb_nearest(
     }
 }
 
+static void letterbox_rgb_nearest(
+    const uint8_t *src,
+    uint32_t src_width,
+    uint32_t src_height,
+    uint8_t *dst,
+    uint32_t dst_width,
+    uint32_t dst_height,
+    uint8_t pad_value)
+{
+    memset(dst, pad_value, static_cast<size_t>(dst_width) * dst_height * 3u);
+
+    uint64_t scaled_width_by_height = static_cast<uint64_t>(dst_height) * src_width / src_height;
+    uint32_t scaled_width = dst_width;
+    uint32_t scaled_height = dst_height;
+    if (scaled_width_by_height <= dst_width) {
+        scaled_width = static_cast<uint32_t>(scaled_width_by_height);
+        scaled_height = dst_height;
+    } else {
+        scaled_width = dst_width;
+        scaled_height = static_cast<uint32_t>(static_cast<uint64_t>(dst_width) * src_height / src_width);
+    }
+    if (scaled_width == 0 || scaled_height == 0) {
+        return;
+    }
+
+    uint32_t pad_x = (dst_width - scaled_width) / 2u;
+    uint32_t pad_y = (dst_height - scaled_height) / 2u;
+    for (uint32_t y = 0; y < scaled_height; ++y) {
+        uint32_t src_y = static_cast<uint32_t>((static_cast<uint64_t>(y) * src_height) / scaled_height);
+        if (src_y >= src_height) {
+            src_y = src_height - 1;
+        }
+        for (uint32_t x = 0; x < scaled_width; ++x) {
+            uint32_t src_x = static_cast<uint32_t>((static_cast<uint64_t>(x) * src_width) / scaled_width);
+            if (src_x >= src_width) {
+                src_x = src_width - 1;
+            }
+            const uint8_t *src_pixel = src + (static_cast<size_t>(src_y) * src_width + src_x) * 3u;
+            uint8_t *dst_pixel = dst + (static_cast<size_t>(y + pad_y) * dst_width + (x + pad_x)) * 3u;
+            dst_pixel[0] = src_pixel[0];
+            dst_pixel[1] = src_pixel[1];
+            dst_pixel[2] = src_pixel[2];
+        }
+    }
+}
+
 int mjpeg_to_rgb_resized(
     const uint8_t *jpeg,
     size_t jpeg_size,
     uint8_t *rgb,
     uint32_t output_width,
     uint32_t output_height,
+    int letterbox,
     JpegDecodeStats *stats)
 {
     if (!jpeg || jpeg_size == 0 || !rgb || output_width == 0 || output_height == 0) {
@@ -131,7 +178,11 @@ int mjpeg_to_rgb_resized(
     uint64_t decode_end_us = jpeg_monotonic_time_us();
 
     uint64_t resize_start_us = jpeg_monotonic_time_us();
-    resize_rgb_nearest(decoded, width, height, rgb, output_width, output_height);
+    if (letterbox) {
+        letterbox_rgb_nearest(decoded, width, height, rgb, output_width, output_height, 114);
+    } else {
+        resize_rgb_nearest(decoded, width, height, rgb, output_width, output_height);
+    }
     uint64_t resize_end_us = jpeg_monotonic_time_us();
     free(decoded);
 

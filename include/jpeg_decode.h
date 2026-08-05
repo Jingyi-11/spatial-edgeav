@@ -17,6 +17,7 @@ int mjpeg_to_rgb_resized(
     uint8_t *rgb,
     uint32_t output_width,
     uint32_t output_height,
+    int letterbox,
     JpegDecodeStats *stats);
 
 #endif

@@ -278,6 +278,13 @@ Dynamic shape is possible as a future experiment, but it requires a dynamic
 ONNX/RKNN export, runtime shape handling, per-shape YOLO decode/bbox mapping,
 and new performance validation.
 
+The C/C++ runtime also has an optional `--letterbox` preprocessing path for
+MJPEG input. On the same RK3576/C920 test, direct resize measured
+`preprocess_mean=13.733 ms`, `rknn_end_to_end_mean=52.497 ms`, and `20/30`
+RKNN frames; letterbox measured `preprocess_mean=11.870 ms`,
+`rknn_end_to_end_mean=50.939 ms`, and `20/30` RKNN frames while preserving the
+camera aspect ratio with gray padding.
+
 Details: [docs/cpp_runtime.md](docs/cpp_runtime.md).
 
 ## RK3567/RK3576 Media Scripts

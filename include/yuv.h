@@ -13,5 +13,14 @@ int yuyv_to_rgb_resized(
     uint8_t *rgb,
     uint32_t output_width,
     uint32_t output_height);
+int yuyv_to_rgb_letterboxed(
+    const uint8_t *yuyv,
+    size_t size,
+    uint32_t width,
+    uint32_t height,
+    uint8_t *rgb,
+    uint32_t output_width,
+    uint32_t output_height,
+    uint8_t pad_value);
 
 #endif
